@@ -941,6 +941,11 @@ def inspect_image(filename, config, verbose=True, show=False):
             if target_name:
                 log(f"{target_title} is {target['name']}")
                 try:
+                    # Skip the slow stdpipe resolver for obvious transient names (SN/AT)
+                    _n = target['name'].lower().replace(" ", "")
+                    if _n.startswith("sn") or _n.startswith("at"):
+                        raise RuntimeError("Transient name – skip stdpipe resolver")
+
                     # First attempt: standard stdpipe resolver (Simbad/Sesame with path syntax)
                     coords = resolve.resolve(target['name'])
                     target['ra'] = coords.ra.deg
