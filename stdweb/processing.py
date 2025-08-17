@@ -977,7 +977,7 @@ def inspect_image(filename, config, verbose=True, show=False):
                         # Transient – log and continue to TNS CSV fallback
                         log("Sesame returned no coordinates, falling back to TNS public CSV…")
 
-                if not len(config['targets']):
+                if 'ra' in target and 'dec' in target and not len(config['targets']):
                     # Keep backwards-compatible primary target coordinates
                     config['target_ra'] = target['ra']
                     config['target_dec'] = target['dec']
