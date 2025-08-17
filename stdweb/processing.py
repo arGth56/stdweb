@@ -924,9 +924,13 @@ def inspect_image(filename, config, verbose=True, show=False):
     if not 'target' in config:
         config['target'] = str(header.get('TARGET'))
 
-    # If target field is empty or literally 'None' skip remote resolution
-    if config.get('target') and str(config['target']).strip().lower() in ['none', 'null', '']:
-        config.pop('target')
+    # Ignore placeholder values that effectively mean "no target" to avoid
+    # triggering slow external name resolution when the FITS header contains
+    # strings like "None" or "SNVA?None".
+    val = str(config.get('target', '')).strip()
+    if not val or val.lower() in ['none', 'null', 'nan', 'snva?none'] or val.lower().endswith('?none'):
+        config.pop('target', None)
+        log("No target specified (placeholder value ignored)")
 
     if config.get('target'):
         config['targets'] = []
