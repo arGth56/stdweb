@@ -977,17 +977,20 @@ def inspect_image(filename, config, verbose=True, show=False):
                         # Transient – log and continue to TNS CSV fallback
                         log("Sesame returned no coordinates, falling back to TNS public CSV…")
 
-                if 'ra' in target and 'dec' in target and not len(config['targets']):
-                    # Keep backwards-compatible primary target coordinates
-                    config['target_ra'] = target['ra']
-                    config['target_dec'] = target['dec']
+                if 'ra' in target and 'dec' in target:
+                    if not len(config['targets']):
+                        # Keep backwards-compatible primary target coordinates
+                        config['target_ra'] = target['ra']
+                        config['target_dec'] = target['dec']
 
-                # Activate target photometry mode
-                config['subtraction_mode'] = 'target'
+                    # Activate target photometry mode
+                    config['subtraction_mode'] = 'target'
 
-                log(f"Resolved to RA={target['ra']:.4f} Dec={target['dec']:.4f}")
+                    log(f"Resolved to RA={target['ra']:.4f} Dec={target['dec']:.4f}")
 
-                config['targets'].append(target)
+                    config['targets'].append(target)
+                else:
+                    log("Target name could not be resolved to coordinates")
 
         if (config.get('target_ra') or config.get('target_dec')) and wcs and wcs.is_celestial:
             if ra0 is not None and dec0 is not None and sr0 is not None:
