@@ -969,9 +969,13 @@ def inspect_image(filename, config, verbose=True, show=False):
                                 raise ValueError("Sesame XML missing coordinates")
                         else:
                             raise RuntimeError(f"Sesame fallback HTTP {r.status_code}")
-                    except Exception:
-                        # Re-raise original error so we still hit the generic 'Target not resolved' path
-                        raise e
+                    except Exception as e_ses:
+                        # For transient names we do NOT abort here; we'll try TNS next.
+                        if not (_n.startswith("sn") or _n.startswith("at")):
+                            # Non-transients: propagate the failure as before.
+                            raise e_ses
+                        # Transient – log and continue to TNS CSV fallback
+                        log("Sesame returned no coordinates, falling back to TNS public CSV…")
 
                 if not len(config['targets']):
                     # Keep backwards-compatible primary target coordinates
