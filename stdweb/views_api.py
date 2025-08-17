@@ -82,7 +82,6 @@ class TaskUploadAPIView(APIView):
                 'prefilter_detections', 'filter_blends', 'diagnose_color', 'refine_wcs',
                 'blind_match_wcs', 'inspect_bg', 'centroid_targets', 'nonlin',
                 'blind_match_ps_lo', 'blind_match_ps_up', 'blind_match_center', 'blind_match_sr0',
-                # Template-subtraction filter flags (NEW)
                 'filter_vizier', 'filter_skybot', 'filter_prefilter',
                 # Inspection parameters
                 'target', 'gain', 'saturation', 'time',
@@ -224,12 +223,11 @@ def task_action_api(request, task_id):
             'prefilter_detections', 'filter_blends', 'diagnose_color', 'refine_wcs',
             'blind_match_wcs', 'inspect_bg', 'centroid_targets', 'nonlin',
             'blind_match_ps_lo', 'blind_match_ps_up', 'blind_match_center', 'blind_match_sr0',
-            # Template-subtraction filter flags (NEW)
             'filter_vizier', 'filter_skybot', 'filter_prefilter',
             # Inspection parameters
             'target', 'gain', 'saturation', 'time',
             # Template selection
-            'template'
+            'template', 'template_catalog'
         ]
 
         updated = False
@@ -291,19 +289,17 @@ def task_action_api(request, task_id):
             status=status.HTTP_404_NOT_FOUND
         ) 
 
+
 # ---------------------------------------------------------------------------
-# Endpoint: upload custom template FITS file to existing task
+# Endpoint: upload custom template FITS file
 # ---------------------------------------------------------------------------
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def task_upload_template_api(request, task_id):
-    """Upload a custom template FITS (stored as custom_template.fits).
-
-    Multipart/form-data with field ``template_file``.
-    """
+    """Upload a custom template FITS file as custom_template.fits in the task dir."""
     if 'template_file' not in request.FILES:
-        return Response({'error': 'No file provided – use form field "template_file".'},
+        return Response({'error': 'No file provided (use form field "template_file")'},
                         status=status.HTTP_400_BAD_REQUEST)
 
     try:
@@ -315,7 +311,6 @@ def task_upload_template_api(request, task_id):
         handle_uploaded_file(request.FILES['template_file'],
                              os.path.join(task.path(), 'custom_template.fits'))
     except Exception as exc:
-        return Response({'error': f'Upload failed: {exc}'},
-                        status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': f'Upload failed: {exc}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     return Response({'message': 'Custom template uploaded as custom_template.fits'}) 

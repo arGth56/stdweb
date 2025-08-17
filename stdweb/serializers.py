@@ -38,10 +38,10 @@ class TaskUploadSerializer(serializers.ModelSerializer):
     centroid_targets = serializers.BooleanField(required=False, help_text="Centroid targets")
     nonlin = serializers.BooleanField(required=False, help_text="Non-linearity correction")
 
-    # --- NEW flags for template-subtraction filtering ---
+    # Template-subtraction filtering flags
     filter_vizier = serializers.BooleanField(required=False, help_text="Filter Vizier catalogues")
-    filter_skybot = serializers.BooleanField(required=False, help_text="Filter SkyBoT")
-    filter_prefilter = serializers.BooleanField(required=False, help_text="Pre-filtering of difference detections")
+    filter_skybot = serializers.BooleanField(required=False, help_text="Filter moving objects (SkyBoT)")
+    filter_prefilter = serializers.BooleanField(required=False, help_text="Machine-learning pre-filter for detections")
     
     # Blind matching parameters
     blind_match_ps_lo = serializers.FloatField(required=False, allow_null=True, help_text="Scale lower limit, arcsec/pix")
