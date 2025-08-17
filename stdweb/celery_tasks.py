@@ -87,20 +87,17 @@ def task_inspect(self, id, finalize=True):
     try:
         processing.inspect_image(os.path.join(basepath, 'image.fits'), config, verbose=log)
         task.state = 'inspect_done'
-    except:
+    except Exception:
         import traceback
         log("\nError!\n", traceback.format_exc())
-
         task.state = 'inspect_failed'
-        task.celery_id = None
+    finally:
+        task.celery_id = None  # always clear
+        if finalize:
+            task.complete()
 
-    if finalize:
-        # End processing
-        task.celery_id = None
-        task.complete()
-
-    fix_config(config)
-    task.save()
+        fix_config(config)
+        task.save()
 
 
 @shared_task(bind=True)
