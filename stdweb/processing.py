@@ -941,23 +941,44 @@ def inspect_image(filename, config, verbose=True, show=False):
             if target_name:
                 log(f"{target_title} is {target['name']}")
                 try:
+                    # First attempt: standard stdpipe resolver (Simbad/Sesame with path syntax)
                     coords = resolve.resolve(target['name'])
                     target['ra'] = coords.ra.deg
                     target['dec'] = coords.dec.deg
+                except Exception as e:
+                    # Fallback for the 2025-08-16 change in Sesame URL API: try the "?name" syntax
+                    try:
+                        import requests, xml.etree.ElementTree as ET
 
-                    if not len(config['targets']):
-                        # Keep backwards-compatible primary target coordinates
-                        config['target_ra'] = target['ra']
-                        config['target_dec'] = target['dec']
+                        url = f"https://cds.unistra.fr/cgi-bin/nph-sesame/-oxp?{requests.utils.quote(target['name'])}"
+                        r = requests.get(url, timeout=10)
+                        if r.ok:
+                            root = ET.fromstring(r.text)
+                            # Look for first <Target>/<Resolver> that has <jradeg> & <jdedeg>
+                            jra = root.find('.//jradeg')
+                            jde = root.find('.//jdedeg')
+                            if jra is not None and jde is not None:
+                                target['ra'] = float(jra.text)
+                                target['dec'] = float(jde.text)
+                            else:
+                                raise ValueError("Sesame XML missing coordinates")
+                        else:
+                            raise RuntimeError(f"Sesame fallback HTTP {r.status_code}")
+                    except Exception:
+                        # Re-raise original error so we still hit the generic 'Target not resolved' path
+                        raise e
 
-                    # Activate target photometry mode
-                    config['subtraction_mode'] = 'target'
+                if not len(config['targets']):
+                    # Keep backwards-compatible primary target coordinates
+                    config['target_ra'] = target['ra']
+                    config['target_dec'] = target['dec']
 
-                    log(f"Resolved to RA={target['ra']:.4f} Dec={target['dec']:.4f}")
+                # Activate target photometry mode
+                config['subtraction_mode'] = 'target'
 
-                    config['targets'].append(target)
-                except:
-                    log("Target not resolved")
+                log(f"Resolved to RA={target['ra']:.4f} Dec={target['dec']:.4f}")
+
+                config['targets'].append(target)
 
         if (config.get('target_ra') or config.get('target_dec')) and wcs and wcs.is_celestial:
             if ra0 is not None and dec0 is not None and sr0 is not None:
@@ -1691,7 +1712,11 @@ def photometry_image(filename, config, verbose=True, show=False):
             fluxerr = target_obj['bg_fluxerr']
         else:
             fluxerr = target_obj['fluxerr']
-        target_obj['mag_limit'] = -2.5*np.log10(config.get('sn', 5)*fluxerr) + m['zero_fn'](target_obj['x'], target_obj['y'], target_obj['mag'])
+        target_obj['mag_limit'] = -2.5*np.log10(config.get('sn', 5)*fluxerr) + m['zero_fn'](
+            target_obj['x'],
+            target_obj['y'],
+            target_obj['mag']
+        )
 
         target_obj['mag_filter_name'] = m['cat_col_mag']
 
