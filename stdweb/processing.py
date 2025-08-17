@@ -977,6 +977,88 @@ def inspect_image(filename, config, verbose=True, show=False):
                         # Transient – log and continue to TNS CSV fallback
                         log("Sesame returned no coordinates, falling back to TNS public CSV…")
 
+                        # --- TNS CSV fallback (runs immediately here) ---
+                        try:
+                            import csv, io, urllib.parse as _up
+
+                            headers = {
+                                "User-Agent": "Mozilla/5.0 (compatible; stdweb/1.0)",
+                                "Accept": "text/csv",
+                                "Accept-Language": "en-US,en;q=0.5",
+                            }
+
+                            def _norm(s):
+                                return str(s).strip().lower().replace(" ", "")
+
+                            # Direct name-filtered CSV (some regions allow this without login)
+                            name_variants = [target['name'], target['name'].replace(' ', '')]
+                            for nm in name_variants:
+                                for months in (1, 3, 12):
+                                    q = (
+                                        "https://www.wis-tns.org/search?"
+                                        f"reported_within_last_value={months}&reported_within_last_units=months&"
+                                        "classified_sne=1&unclassified_at=0&include_frb=0&"
+                                        f"name={_up.quote(nm)}&name_like=0&isTNS_AT=all&public=all&unreal=no&"
+                                        "num_page=50&format=csv"
+                                    )
+                                    log(f"TNS name CSV: months={months} name='{nm}' -> GET {q}")
+                                    rr = requests.get(q, headers=headers, timeout=15, allow_redirects=True)
+                                    log(f"TNS name CSV: HTTP {rr.status_code} ({len(rr.content)} bytes)")
+                                    if rr.status_code != 200 or len(rr.content) < 20:
+                                        continue
+                                    content = rr.content.lstrip(b"\xef\xbb\xbf").decode(errors="replace")
+                                    reader = csv.DictReader(io.StringIO(content))
+                                    matched = False
+                                    for row in reader:
+                                        if _norm(row.get("Name")) in (_norm(target['name']), _norm(nm)):
+                                            ra_str, dec_str = row.get("RA"), row.get("DEC")
+                                            if ra_str and dec_str:
+                                                from astropy.coordinates import SkyCoord
+                                                c = SkyCoord(ra_str + " " + dec_str, unit=(u.hourangle, u.deg))
+                                                target['ra'] = c.ra.deg
+                                                target['dec'] = c.dec.deg
+                                                log(f"TNS CSV matched: RA={target['ra']:.6f} DEC={target['dec']:.6f}")
+                                                matched = True
+                                                break
+                                    if matched:
+                                        break
+                                if 'ra' in target:
+                                    break
+
+                            # If still not found, paginate recent public CSV
+                            if 'ra' not in target:
+                                for page in range(1, 6):  # first 2500 rows for speed
+                                    url = (
+                                        "https://www.wis-tns.org/search?"
+                                        "reported_within_last_value=365&reported_within_last_units=days&"
+                                        "num_page=500&public=1&format=csv&include_redshift=1&"
+                                        f"page={page}"
+                                    )
+                                    log(f"TNS page CSV: page={page} -> GET {url}")
+                                    rr = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
+                                    log(f"TNS page CSV: HTTP {rr.status_code} ({len(rr.content)} bytes)")
+                                    if rr.status_code != 200 or len(rr.content) < 20:
+                                        continue
+                                    content = rr.content.lstrip(b"\xef\xbb\xbf").decode(errors="replace")
+                                    reader = csv.DictReader(io.StringIO(content))
+                                    rows_found = 0
+                                    for row in reader:
+                                        rows_found += 1
+                                        if _norm(row.get("Name")) == _norm(target['name']):
+                                            ra_str, dec_str = row.get("RA"), row.get("DEC")
+                                            if ra_str and dec_str:
+                                                from astropy.coordinates import SkyCoord
+                                                c = SkyCoord(ra_str + " " + dec_str, unit=(u.hourangle, u.deg))
+                                                target['ra'] = c.ra.deg
+                                                target['dec'] = c.dec.deg
+                                                log(f"TNS CSV matched (page): RA={target['ra']:.6f} DEC={target['dec']:.6f}")
+                                                break
+                                    if 'ra' in target or rows_found < 500:
+                                        break
+                                    time.sleep(1)
+                        except Exception as e2:
+                            log(f"TNS CSV lookup failed: {e2}")
+
                 if 'ra' in target and 'dec' in target:
                     if not len(config['targets']):
                         # Keep backwards-compatible primary target coordinates
