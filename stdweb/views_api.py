@@ -13,6 +13,8 @@ from .models import Task, Preset
 from .serializers import TaskUploadSerializer, TaskSerializer, PresetSerializer
 from .views import handle_uploaded_file
 from . import celery_tasks
+from django.http import HttpResponse
+import csv
 
 
 class TaskUploadAPIView(APIView):
@@ -314,3 +316,41 @@ def task_upload_template_api(request, task_id):
         return Response({'error': f'Upload failed: {exc}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     return Response({'message': 'Custom template uploaded as custom_template.fits'}) 
+
+
+# ---------------------------------------------------------------------------
+# Endpoint: export tasks as CSV (email, created date, original image name)
+# ---------------------------------------------------------------------------
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def task_export_csv_api(request):
+    """Return a CSV of tasks with columns: email, created, original_name.
+
+    - If the requesting user is staff, include all tasks.
+    - Otherwise, include only tasks belonging to the user.
+    """
+    if request.user.is_staff:
+        queryset = Task.objects.all().order_by('-created')
+    else:
+        queryset = Task.objects.filter(user=request.user).order_by('-created')
+
+    # Prepare CSV response
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = 'attachment; filename="tasks_export.csv"'
+
+    writer = csv.writer(response)
+    writer.writerow(['email', 'username', 'created', 'original_name'])
+
+    for task in queryset.select_related('user').only('original_name', 'created', 'user__email', 'user__username'):
+        username = task.user.username if task.user and task.user.username else ''
+        email = ''
+        if task.user:
+            if getattr(task.user, 'email', None):
+                email = task.user.email
+            elif username and '@' in username:
+                # Fallback: if username looks like an email, use it
+                email = username
+        writer.writerow([email, username, task.created.isoformat(), task.original_name])
+
+    return response

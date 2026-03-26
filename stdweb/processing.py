@@ -977,57 +977,35 @@ def inspect_image(filename, config, verbose=True, show=False):
                         # Transient – log and continue to TNS CSV fallback
                         log("Sesame returned no coordinates, falling back to TNS public CSV…")
 
-                        # --- TNS CSV fallback (runs immediately here) ---
+                        # --- TNS fallback (runs immediately here) ---
                         try:
-                            import csv, io, urllib.parse as _up
+                            import csv, io, urllib.parse as _up, time as _time, re as _re
 
-                            headers = {
-                                "User-Agent": "Mozilla/5.0 (compatible; stdweb/1.0)",
-                                "Accept": "text/csv",
-                                "Accept-Language": "en-US,en;q=0.5",
-                            }
+                            # Bare name without "AT "/"SN " prefix (TNS URLs use the bare name)
+                            bare_name = _re.sub(r'^(AT|SN)\s*', '', target['name'], flags=_re.IGNORECASE).strip()
 
                             def _norm(s):
                                 return str(s).strip().lower().replace(" ", "")
 
-                            # Direct name-filtered CSV (some regions allow this without login)
-                            name_variants = [target['name'], target['name'].replace(' ', '')]
-                            for nm in name_variants:
-                                for months in (1, 3, 12):
-                                    q = (
-                                        "https://www.wis-tns.org/search?"
-                                        f"reported_within_last_value={months}&reported_within_last_units=months&"
-                                        "classified_sne=1&unclassified_at=0&include_frb=0&"
-                                        f"name={_up.quote(nm)}&name_like=0&isTNS_AT=all&public=all&unreal=no&"
-                                        "num_page=50&format=csv"
-                                    )
-                                    log(f"TNS name CSV: months={months} name='{nm}' -> GET {q}")
-                                    rr = requests.get(q, headers=headers, timeout=15, allow_redirects=True)
-                                    log(f"TNS name CSV: HTTP {rr.status_code} ({len(rr.content)} bytes)")
-                                    if rr.status_code != 200 or len(rr.content) < 20:
-                                        continue
-                                    content = rr.content.lstrip(b"\xef\xbb\xbf").decode(errors="replace")
-                                    reader = csv.DictReader(io.StringIO(content))
-                                    matched = False
-                                    for row in reader:
-                                        if _norm(row.get("Name")) in (_norm(target['name']), _norm(nm)):
-                                            ra_str, dec_str = row.get("RA"), row.get("DEC")
-                                            if ra_str and dec_str:
-                                                from astropy.coordinates import SkyCoord
-                                                c = SkyCoord(ra_str + " " + dec_str, unit=(u.hourangle, u.deg))
-                                                target['ra'] = c.ra.deg
-                                                target['dec'] = c.dec.deg
-                                                log(f"TNS CSV matched: RA={target['ra']:.6f} DEC={target['dec']:.6f}")
-                                                matched = True
-                                                break
-                                    if matched:
-                                        break
-                                if 'ra' in target:
-                                    break
+                            _ua_headers = {"User-Agent": "Mozilla/5.0 (compatible; stdweb/1.0)"}
 
-                            # If still not found, paginate recent public CSV
+                            # --- Strategy 1: direct TNS object page (no auth required) ---
+                            # The public page at wis-tns.org/object/<name> embeds decimal
+                            # RA/Dec directly in the HTML, e.g. "131.52412414551 +10.794554710388"
+                            tns_obj_url = f"https://www.wis-tns.org/object/{_up.quote(bare_name)}"
+                            log(f"TNS object page: GET {tns_obj_url}")
+                            rr = requests.get(tns_obj_url, headers=_ua_headers, timeout=15, allow_redirects=True)
+                            log(f"TNS object page: HTTP {rr.status_code} ({len(rr.content)} bytes)")
+                            if rr.status_code == 200:
+                                m = _re.search(r'\b(\d{2,3}\.\d{4,})\s+([+-]\d{1,2}\.\d{4,})\b', rr.text)
+                                if m:
+                                    target['ra'] = float(m.group(1))
+                                    target['dec'] = float(m.group(2))
+                                    log(f"TNS object page resolved: RA={target['ra']:.6f} DEC={target['dec']:.6f}")
+
+                            # --- Strategy 2: paginated public CSV (fallback) ---
                             if 'ra' not in target:
-                                for page in range(1, 6):  # first 2500 rows for speed
+                                for page in range(1, 6):
                                     url = (
                                         "https://www.wis-tns.org/search?"
                                         "reported_within_last_value=365&reported_within_last_units=days&"
@@ -1035,8 +1013,11 @@ def inspect_image(filename, config, verbose=True, show=False):
                                         f"page={page}"
                                     )
                                     log(f"TNS page CSV: page={page} -> GET {url}")
-                                    rr = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
+                                    rr = requests.get(url, headers=_ua_headers, timeout=20, allow_redirects=True)
                                     log(f"TNS page CSV: HTTP {rr.status_code} ({len(rr.content)} bytes)")
+                                    if rr.status_code == 429:
+                                        log("TNS page CSV: rate limited, stopping")
+                                        break
                                     if rr.status_code != 200 or len(rr.content) < 20:
                                         continue
                                     content = rr.content.lstrip(b"\xef\xbb\xbf").decode(errors="replace")
@@ -1044,20 +1025,21 @@ def inspect_image(filename, config, verbose=True, show=False):
                                     rows_found = 0
                                     for row in reader:
                                         rows_found += 1
-                                        if _norm(row.get("Name")) == _norm(target['name']):
+                                        row_name = _norm(row.get("Name", ""))
+                                        if row_name in (_norm(target['name']), _norm(bare_name)):
                                             ra_str, dec_str = row.get("RA"), row.get("DEC")
                                             if ra_str and dec_str:
                                                 from astropy.coordinates import SkyCoord
                                                 c = SkyCoord(ra_str + " " + dec_str, unit=(u.hourangle, u.deg))
                                                 target['ra'] = c.ra.deg
                                                 target['dec'] = c.dec.deg
-                                                log(f"TNS CSV matched (page): RA={target['ra']:.6f} DEC={target['dec']:.6f}")
+                                                log(f"TNS CSV matched (page {page}): RA={target['ra']:.6f} DEC={target['dec']:.6f}")
                                                 break
                                     if 'ra' in target or rows_found < 500:
                                         break
-                                    time.sleep(1)
+                                    _time.sleep(2)
                         except Exception as e2:
-                            log(f"TNS CSV lookup failed: {e2}")
+                            log(f"TNS lookup failed: {e2}")
 
                 if 'ra' in target and 'dec' in target:
                     if not len(config['targets']):
