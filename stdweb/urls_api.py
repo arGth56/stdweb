@@ -16,6 +16,7 @@ urlpatterns = [
     path('tasks/<int:task_id>/action/', views_api.task_action_api, name='task_action'),
     path('tasks/<int:task_id>/upload_template/', views_api.task_upload_template_api),
     path('tasks/export.csv', views_api.task_export_csv_api, name='task_export_csv'),
+    path('tasks/<int:task_id>/comparison_stars.csv', views_api.task_comparison_stars_csv, name='task_comparison_stars'),
     
     # Preset endpoints
     path('presets/', views_api.preset_list_api, name='preset_list'),
