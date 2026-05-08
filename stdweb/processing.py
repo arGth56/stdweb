@@ -838,21 +838,42 @@ def inspect_image(filename, config, verbose=True, show=False):
         config['filter'] = 'r'
 
     # Saturation
+    img_max    = np.nanmax(image)
+    img_median = np.nanmedian(image)
+
+    # Validate any previously stored saturation (e.g. from a prior inspection run or FITS header)
+    # If it is <= 2x the sky median it almost certainly refers to raw detector ADU while the image
+    # has been calibrated (bias/flat/e- units), which would flag all stars as saturated.
+    if config.get('saturation') and config['saturation'] <= 2.0 * img_median:
+        log(f"Warning: stored saturation level ({config['saturation']:.0f}) is only "
+            f"{config['saturation']/img_median:.1f}x the sky median ({img_median:.0f}) — "
+            f"resetting to image-based estimate.")
+        config.pop('saturation', None)
+
     if not config.get('saturation'):
         satlevel = header.get(
             'SATURATE',
             header.get('DATAMAX')
         )
+
+        if satlevel:
+            # Same sanity check on the header value
+            if satlevel <= 2.0 * img_median:
+                log(f"Warning: header saturation level ({satlevel:.0f}) is only "
+                    f"{satlevel/img_median:.1f}x the sky median ({img_median:.0f}) — "
+                    f"this looks like a raw-ADU value on a calibrated image. Ignoring it.")
+                satlevel = None
+            elif satlevel < 0.5 * img_max:
+                log(f"Warning: header saturation level ({satlevel:.0f}) is significantly "
+                    f"smaller than image max value ({img_max:.0f})!")
+            elif satlevel > img_max:
+                log(f"Warning: header saturation level ({satlevel:.0f}) is larger than "
+                    f"image max value ({img_max:.0f}).")
+
         if satlevel:
             log("Got saturation level from FITS header")
-
-            if satlevel < 0.5*np.nanmax(image):
-                log(f"Warning: header saturation level ({satlevel}) is significantly smaller than image max value!")
-            elif satlevel > np.nanmax(image):
-                log(f"Warning: header saturation level ({satlevel}) is larger than image max value!")
-
         else:
-            satlevel = 0.05*np.nanmedian(image) + 0.95*np.nanmax(image) # med + 0.95(max-med)
+            satlevel = 0.05 * img_median + 0.95 * img_max  # sky + 0.95*(max-sky)
             log("Estimating saturation level from the image max value")
 
         config['saturation'] = satlevel
@@ -941,105 +962,147 @@ def inspect_image(filename, config, verbose=True, show=False):
             if target_name:
                 log(f"{target_title} is {target['name']}")
                 try:
-                    # Skip the slow stdpipe resolver for obvious transient names (SN/AT)
-                    _n = target['name'].lower().replace(" ", "")
-                    if _n.startswith("sn") or _n.startswith("at"):
-                        raise RuntimeError("Transient name – skip stdpipe resolver")
+                    # ── Step 0: try direct coordinate parsing ──────────────────────────
+                    # Handles "163.1522 22.9317", "10 52 36.5 +22 55 54", etc.
+                    import re as _re2
+                    from astropy.coordinates import SkyCoord
+                    import astropy.units as _u
+
+                    _stripped = target['name'].strip()
+                    # A coordinate string contains at least one space and starts with a digit or +/-
+                    _looks_like_coords = (
+                        ' ' in _stripped and
+                        _re2.match(r'^[\d+\-]', _stripped)
+                    )
+                    # A bare decimal number (single token, no letters) is likely an incomplete coord
+                    _bare_number = _re2.match(r'^[\+\-]?\d+(\.\d+)?$', _stripped)
+
+                    if _bare_number:
+                        raise ValueError(
+                            f"Target '{_stripped}' looks like a single coordinate value (RA only?). "
+                            "Please enter both RA and Dec, e.g. '163.152 22.932' or '10 52 36.5 +22 55 54'."
+                        )
+
+                    if _looks_like_coords:
+                        try:
+                            # Try decimal degrees first, then sexagesimal
+                            parts = _stripped.split()
+                            if len(parts) == 2:
+                                _sc = SkyCoord(float(parts[0]), float(parts[1]), unit=_u.deg)
+                            else:
+                                _sc = SkyCoord(_stripped, unit=(_u.hourangle, _u.deg))
+                            target['ra']  = _sc.ra.deg
+                            target['dec'] = _sc.dec.deg
+                            log(f"  Resolved as coordinates: RA={target['ra']:.5f}, Dec={target['dec']:.5f}")
+                        except Exception as _ce:
+                            # Doesn't parse as coords either — fall through to Sesame
+                            pass
+
+                    if 'ra' not in target:
+                        # Skip the slow stdpipe resolver for obvious transient names (SN/AT)
+                        _n = target['name'].lower().replace(" ", "")
+                        if _n.startswith("sn") or _n.startswith("at"):
+                            raise RuntimeError("Transient name – skip stdpipe resolver")
 
                     # First attempt: standard stdpipe resolver (Simbad/Sesame with path syntax)
-                    coords = resolve.resolve(target['name'])
-                    target['ra'] = coords.ra.deg
-                    target['dec'] = coords.dec.deg
+                    if 'ra' not in target:
+                        coords = resolve.resolve(target['name'])
+                        target['ra'] = coords.ra.deg
+                        target['dec'] = coords.dec.deg
                 except Exception as e:
-                    # Fallback for the 2025-08-16 change in Sesame URL API: try the "?name" syntax
-                    try:
-                        import requests, xml.etree.ElementTree as ET
-
-                        url = f"https://cds.unistra.fr/cgi-bin/nph-sesame/-oxp?{requests.utils.quote(target['name'])}"
-                        r = requests.get(url, timeout=10)
-                        if r.ok:
-                            root = ET.fromstring(r.text)
-                            # Look for first <Target>/<Resolver> that has <jradeg> & <jdedeg>
-                            jra = root.find('.//jradeg')
-                            jde = root.find('.//jdedeg')
-                            if jra is not None and jde is not None:
-                                target['ra'] = float(jra.text)
-                                target['dec'] = float(jde.text)
-                            else:
-                                raise ValueError("Sesame XML missing coordinates")
-                        else:
-                            raise RuntimeError(f"Sesame fallback HTTP {r.status_code}")
-                    except Exception as e_ses:
-                        # For transient names we do NOT abort here; we'll try TNS next.
-                        if not (_n.startswith("sn") or _n.startswith("at")):
-                            # Non-transients: propagate the failure as before.
-                            raise e_ses
-                        # Transient – log and continue to TNS CSV fallback
-                        log("Sesame returned no coordinates, falling back to TNS public CSV…")
-
-                        # --- TNS fallback (runs immediately here) ---
+                    if 'ra' in target:
+                        pass  # already resolved as coordinates above, ignore exception
+                    else:
+                        # Fallback for the 2025-08-16 change in Sesame URL API: try the "?name" syntax
                         try:
-                            import csv, io, urllib.parse as _up, time as _time, re as _re
+                            import requests, xml.etree.ElementTree as ET
 
-                            # Bare name without "AT "/"SN " prefix (TNS URLs use the bare name)
-                            bare_name = _re.sub(r'^(AT|SN)\s*', '', target['name'], flags=_re.IGNORECASE).strip()
+                            url = f"https://cds.unistra.fr/cgi-bin/nph-sesame/-oxp?{requests.utils.quote(target['name'])}"
+                            r = requests.get(url, timeout=10)
+                            if r.ok:
+                                root = ET.fromstring(r.text)
+                                # Look for first <Target>/<Resolver> that has <jradeg> & <jdedeg>
+                                jra = root.find('.//jradeg')
+                                jde = root.find('.//jdedeg')
+                                if jra is not None and jde is not None:
+                                    target['ra'] = float(jra.text)
+                                    target['dec'] = float(jde.text)
+                                else:
+                                    raise ValueError("Sesame XML missing coordinates")
+                            else:
+                                raise RuntimeError(f"Sesame fallback HTTP {r.status_code}")
+                        except Exception as e_ses:
+                            # For transient names we do NOT abort here; we'll try TNS next.
+                            _n = target['name'].lower().replace(" ", "")
+                            if not (_n.startswith("sn") or _n.startswith("at")):
+                                # Non-transients: propagate the failure as before.
+                                raise e_ses
+                            # Transient – log and continue to TNS CSV fallback
+                            log("Sesame returned no coordinates, falling back to TNS public CSV…")
 
-                            def _norm(s):
-                                return str(s).strip().lower().replace(" ", "")
+                            # --- TNS fallback (runs immediately here) ---
+                            try:
+                                import csv, io, urllib.parse as _up, time as _time, re as _re
 
-                            _ua_headers = {"User-Agent": "Mozilla/5.0 (compatible; stdweb/1.0)"}
+                                # Bare name without "AT "/"SN " prefix (TNS URLs use the bare name)
+                                bare_name = _re.sub(r'^(AT|SN)\s*', '', target['name'], flags=_re.IGNORECASE).strip()
 
-                            # --- Strategy 1: direct TNS object page (no auth required) ---
-                            # The public page at wis-tns.org/object/<name> embeds decimal
-                            # RA/Dec directly in the HTML, e.g. "131.52412414551 +10.794554710388"
-                            tns_obj_url = f"https://www.wis-tns.org/object/{_up.quote(bare_name)}"
-                            log(f"TNS object page: GET {tns_obj_url}")
-                            rr = requests.get(tns_obj_url, headers=_ua_headers, timeout=15, allow_redirects=True)
-                            log(f"TNS object page: HTTP {rr.status_code} ({len(rr.content)} bytes)")
-                            if rr.status_code == 200:
-                                m = _re.search(r'\b(\d{2,3}\.\d{4,})\s+([+-]\d{1,2}\.\d{4,})\b', rr.text)
-                                if m:
-                                    target['ra'] = float(m.group(1))
-                                    target['dec'] = float(m.group(2))
-                                    log(f"TNS object page resolved: RA={target['ra']:.6f} DEC={target['dec']:.6f}")
+                                def _norm(s):
+                                    return str(s).strip().lower().replace(" ", "")
 
-                            # --- Strategy 2: paginated public CSV (fallback) ---
-                            if 'ra' not in target:
-                                for page in range(1, 6):
-                                    url = (
-                                        "https://www.wis-tns.org/search?"
-                                        "reported_within_last_value=365&reported_within_last_units=days&"
-                                        "num_page=500&public=1&format=csv&include_redshift=1&"
-                                        f"page={page}"
-                                    )
-                                    log(f"TNS page CSV: page={page} -> GET {url}")
-                                    rr = requests.get(url, headers=_ua_headers, timeout=20, allow_redirects=True)
-                                    log(f"TNS page CSV: HTTP {rr.status_code} ({len(rr.content)} bytes)")
-                                    if rr.status_code == 429:
-                                        log("TNS page CSV: rate limited, stopping")
-                                        break
-                                    if rr.status_code != 200 or len(rr.content) < 20:
-                                        continue
-                                    content = rr.content.lstrip(b"\xef\xbb\xbf").decode(errors="replace")
-                                    reader = csv.DictReader(io.StringIO(content))
-                                    rows_found = 0
-                                    for row in reader:
-                                        rows_found += 1
-                                        row_name = _norm(row.get("Name", ""))
-                                        if row_name in (_norm(target['name']), _norm(bare_name)):
-                                            ra_str, dec_str = row.get("RA"), row.get("DEC")
-                                            if ra_str and dec_str:
-                                                from astropy.coordinates import SkyCoord
-                                                c = SkyCoord(ra_str + " " + dec_str, unit=(u.hourangle, u.deg))
-                                                target['ra'] = c.ra.deg
-                                                target['dec'] = c.dec.deg
-                                                log(f"TNS CSV matched (page {page}): RA={target['ra']:.6f} DEC={target['dec']:.6f}")
-                                                break
-                                    if 'ra' in target or rows_found < 500:
-                                        break
-                                    _time.sleep(2)
-                        except Exception as e2:
-                            log(f"TNS lookup failed: {e2}")
+                                _ua_headers = {"User-Agent": "Mozilla/5.0 (compatible; stdweb/1.0)"}
+
+                                # --- Strategy 1: direct TNS object page (no auth required) ---
+                                # The public page at wis-tns.org/object/<name> embeds decimal
+                                # RA/Dec directly in the HTML, e.g. "131.52412414551 +10.794554710388"
+                                tns_obj_url = f"https://www.wis-tns.org/object/{_up.quote(bare_name)}"
+                                log(f"TNS object page: GET {tns_obj_url}")
+                                rr = requests.get(tns_obj_url, headers=_ua_headers, timeout=15, allow_redirects=True)
+                                log(f"TNS object page: HTTP {rr.status_code} ({len(rr.content)} bytes)")
+                                if rr.status_code == 200:
+                                    m = _re.search(r'\b(\d{2,3}\.\d{4,})\s+([+-]\d{1,2}\.\d{4,})\b', rr.text)
+                                    if m:
+                                        target['ra'] = float(m.group(1))
+                                        target['dec'] = float(m.group(2))
+                                        log(f"TNS object page resolved: RA={target['ra']:.6f} DEC={target['dec']:.6f}")
+
+                                # --- Strategy 2: paginated public CSV (fallback) ---
+                                if 'ra' not in target:
+                                    for page in range(1, 6):
+                                        url = (
+                                            "https://www.wis-tns.org/search?"
+                                            "reported_within_last_value=365&reported_within_last_units=days&"
+                                            "num_page=500&public=1&format=csv&include_redshift=1&"
+                                            f"page={page}"
+                                        )
+                                        log(f"TNS page CSV: page={page} -> GET {url}")
+                                        rr = requests.get(url, headers=_ua_headers, timeout=20, allow_redirects=True)
+                                        log(f"TNS page CSV: HTTP {rr.status_code} ({len(rr.content)} bytes)")
+                                        if rr.status_code == 429:
+                                            log("TNS page CSV: rate limited, stopping")
+                                            break
+                                        if rr.status_code != 200 or len(rr.content) < 20:
+                                            continue
+                                        content = rr.content.lstrip(b"\xef\xbb\xbf").decode(errors="replace")
+                                        reader = csv.DictReader(io.StringIO(content))
+                                        rows_found = 0
+                                        for row in reader:
+                                            rows_found += 1
+                                            row_name = _norm(row.get("Name", ""))
+                                            if row_name in (_norm(target['name']), _norm(bare_name)):
+                                                ra_str, dec_str = row.get("RA"), row.get("DEC")
+                                                if ra_str and dec_str:
+                                                    from astropy.coordinates import SkyCoord
+                                                    c = SkyCoord(ra_str + " " + dec_str, unit=(u.hourangle, u.deg))
+                                                    target['ra'] = c.ra.deg
+                                                    target['dec'] = c.dec.deg
+                                                    log(f"TNS CSV matched (page {page}): RA={target['ra']:.6f} DEC={target['dec']:.6f}")
+                                                    break
+                                        if 'ra' in target or rows_found < 500:
+                                            break
+                                        _time.sleep(2)
+                            except Exception as e2:
+                                log(f"TNS lookup failed: {e2}")
 
                 if 'ra' in target and 'dec' in target:
                     if not len(config['targets']):
@@ -1218,7 +1281,8 @@ def photometry_image(filename, config, verbose=True, show=False):
 
     log("\n---- Object measurement ----\n")
 
-    # FWHM
+    # FWHM star selection
+    # Start with "ideal" selection: no SExtractor flags + S/N > 20 + pre-filter
     idx = obj['flags'] == 0
     idx &= obj['magerr'] < 1/20
 
@@ -1230,7 +1294,36 @@ def photometry_image(filename, config, verbose=True, show=False):
         obj['flags'][~fidx] |= 0x800
 
     if not len(obj[idx]):
-        raise RuntimeError("No suitable stars with S/N > 20 in the image!")
+        # Diagnose and try progressively relaxed selections
+        n_clean   = np.sum(obj['flags'] == 0)
+        n_sn20    = np.sum(obj['magerr'] < 1/20)
+        n_prefilt = np.sum((obj['flags'] & 0x800) == 0) if config.get('prefilter_detections', True) else len(obj)
+        log(f"Warning: strict FWHM selection empty (flags==0: {n_clean}, S/N>20: {n_sn20}, prefilter ok: {n_prefilt})")
+        log("Trying relaxed star selection for FWHM estimation…")
+
+        # Relaxation 1: allow SExtractor flags (deblended, etc.) but keep pre-filter + any S/N
+        idx = (obj['flags'] & 0x800) == 0   # only exclude pre-filter outliers
+        idx &= obj['magerr'] < 1/20
+
+        if not len(obj[idx]):
+            # Relaxation 2: drop S/N > 20 — use best 20% by S/N among pre-filter survivors
+            idx = (obj['flags'] & 0x800) == 0
+            if len(obj[idx]):
+                magerr_threshold = np.percentile(obj['magerr'][idx], 20)
+                idx &= obj['magerr'] <= magerr_threshold
+                log(f"Relaxation 2: using top-20%% S/N stars (magerr ≤ {magerr_threshold:.3f}, "
+                    f"i.e. S/N ≥ {1/magerr_threshold:.1f})")
+
+        if not len(obj[idx]):
+            raise RuntimeError(
+                f"No suitable stars for FWHM estimation. "
+                f"Detected {len(obj)} objects; {n_clean} have no SExtractor flags; "
+                f"{n_sn20} have S/N > 20. "
+                f"Check gain value ({config.get('gain')}) and saturation level ({config.get('saturation'):.0f}). "
+                f"Image sky median={np.nanmedian(image):.0f} ADU, max={np.nanmax(image):.0f} ADU."
+            )
+        else:
+            log(f"Using {np.sum(idx)} stars for FWHM after relaxed selection.")
 
     fwhm_values = 2.0*obj['FLUX_RADIUS'] # obj['fwhm']
 
@@ -1547,7 +1640,8 @@ def photometry_image(filename, config, verbose=True, show=False):
                                           _tmpdir=settings.STDPIPE_TMPDIR,
                                           _exe=settings.STDPIPE_SCAMP)
         if wcs1 is None or not wcs1.is_celestial:
-            raise RuntimeError('WCS refinement failed')
+            log("Warning: WCS refinement failed (SCAMP chi2 too high or no convergence). "
+                "Continuing with existing WCS from blind match.")
         else:
             wcs = wcs1
             obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
