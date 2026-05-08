@@ -109,11 +109,45 @@
      }
    }
 
-   // Toggle visibility of custom template options depending on the checkbox
-   $(function(){
-     $('#id_subtraction_method').on('change', check_sub_method_visibility);
-     check_sub_method_visibility();
-   });
+  $(function(){
+    $('#id_subtraction_method').on('change', check_sub_method_visibility);
+    check_sub_method_visibility();
+  });
+
+  // Populate template_filter dropdown based on selected survey
+  var survey_bands = {
+    {% for key, tmpl in supported_templates.items %}
+      {% if tmpl.filters %}
+        '{{ key }}': [{% for f in tmpl.filters %}'{{ f }}'{% if not forloop.last %}, {% endif %}{% endfor %}],
+      {% else %}
+        '{{ key }}': [],
+      {% endif %}
+    {% endfor %}
+  };
+
+  function update_template_filter_options(){
+    var survey = $('#id_template').find(":selected").val();
+    var $sel = $('#id_template_filter');
+    var current = $sel.val();
+    var bands = survey_bands[survey] || [];
+    bands.sort();
+    $sel.find('option').not('[value=""]').each(function(){
+      var band = $(this).val();
+      if (bands.indexOf(band) === -1){
+        $(this).hide().prop('disabled', true);
+      } else {
+        $(this).show().prop('disabled', false);
+      }
+    });
+    if (current && bands.indexOf(current) === -1){
+      $sel.val('');
+    }
+  }
+
+  $(function(){
+    $('#id_template').on('change', update_template_filter_options);
+    update_template_filter_options();
+  });
 
    check_transients_visibility = function(){
      var checked = $('#id_subtraction_mode_1').prop('checked');

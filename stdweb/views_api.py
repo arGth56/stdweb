@@ -1,4 +1,5 @@
 import os
+import pickle
 import shutil
 from django.conf import settings
 from rest_framework import status
@@ -8,6 +9,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
 from celery import chain
+import numpy as np
+from astropy.table import Table
 
 from .models import Task, Preset
 from .serializers import TaskUploadSerializer, TaskSerializer, PresetSerializer
@@ -88,7 +91,7 @@ class TaskUploadAPIView(APIView):
                 # Inspection parameters
                 'target', 'gain', 'saturation', 'time',
                 # Template selection
-                'template'
+                'template', 'template_filter'
             ]
             
             for param in config_params:
@@ -229,7 +232,7 @@ def task_action_api(request, task_id):
             # Inspection parameters
             'target', 'gain', 'saturation', 'time',
             # Template selection
-            'template', 'template_catalog'
+            'template', 'template_catalog', 'template_filter'
         ]
 
         updated = False

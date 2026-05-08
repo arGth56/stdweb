@@ -193,7 +193,7 @@ STDPIPE_SCAMP = config('STDPIPE_SCAMP', default=None)
 # Path to PSFEx executable
 STDPIPE_PSFEX = config('STDPIPE_PSFEX', default=None)
 # Path to PSFEx executable
-STDPIPE_HOTPANTS = config('STDPIPE_HOTPANTS', default=None)
+STDPIPE_HOTPANTS = config('STDPIPE_HOTPANTS', default='/usr/local/bin/hotpants')
 # Path to SWarp executable
 STDPIPE_SWARP = config('STDPIPE_SWARP', default=None)
 # Path to store PS1 download cache (if not set, use task-local cache)

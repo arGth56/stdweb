@@ -2156,6 +2156,7 @@ def transients_simple_image(filename, config, verbose=True, show=False):
         log("No candidates found")
 
 
+
 def subtract_image(filename, config, verbose=True, show=False):
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
@@ -2236,7 +2237,38 @@ def subtract_image(filename, config, verbose=True, show=False):
 
         template_gain = 10000 # Assume effectively noise-less
 
-        log(f"Using {tconf['name']} in filter {tfilter} as a template")
+        # Allow manual override of template filter band
+        tfilter_override = config.get('template_filter')
+        if tfilter_override and tfilter_override in tconf.get('filters', {}):
+            tfilter = tfilter_override
+            log(f"Using {tconf['name']} in filter {tfilter} as a template (manual override)")
+        else:
+            log(f"Using {tconf['name']} in filter {tfilter} as a template")
+
+        # Quick coverage check before heavy processing
+        ra_c, dec_c, _ = astrometry.get_frame_center(wcs=wcs, width=image.shape[1], height=image.shape[0])
+        if tname in ('ps1', 'ls'):
+            check_fn = templates.point_in_ps1 if tname == 'ps1' else templates.point_in_ls
+            if not check_fn(ra_c, dec_c):
+                raise RuntimeError(
+                    f"No {tconf['name']} coverage at RA={ra_c:.3f} Dec={dec_c:.3f} — "
+                    f"try a different survey"
+                )
+        elif tname != 'custom' and isinstance(tconf.get('filters'), dict):
+            hips_id = tconf['filters'].get(tfilter)
+            if hips_id:
+                log(f"Checking {tconf['name']} {tfilter}-band coverage...")
+                probe = templates.get_hips_image(
+                    hips_id, ra=ra_c, dec=dec_c,
+                    width=64, height=64, fov=pixscale * 200,
+                    get_header=False, normalize=False, verbose=False
+                )
+                if probe is None or not np.any(np.isfinite(probe)):
+                    raise RuntimeError(
+                        f"No {tconf['name']} {tfilter}-band coverage at "
+                        f"RA={ra_c:.3f} Dec={dec_c:.3f} — try a different survey or band"
+                    )
+                log(f"Coverage confirmed")
 
     sub_size = config.get('sub_size', 1000)
     sub_overlap = config.get('sub_overlap', 50)
@@ -2365,6 +2397,9 @@ def subtract_image(filename, config, verbose=True, show=False):
                     f"({x0},{y0})-({x0+image1.shape[1]},{y0+image1.shape[0]}) — skipping")
                 continue
             tmask = np.isnan(tmpl)
+            if np.all(tmask):
+                log(f"Warning: template from {tconf['name']} ({tfilter}-band) is all NaN for sub-image {i} — no coverage, skipping")
+                continue
 
         # Estimate template FWHM
         tobj,tsegm = photometry.get_objects_sextractor(

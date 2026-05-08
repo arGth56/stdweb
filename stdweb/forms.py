@@ -288,6 +288,10 @@ class TaskSubtractionForm(forms.Form):
 
     subtraction_method = forms.ChoiceField(choices=[('zogy', 'ZOGY'), ('hotpants', 'HOTPANTS')],
                                          initial='hotpants', required=False, label="Method")
+    template_filter = forms.ChoiceField(
+        choices=[('', 'Auto')] + [(_,_) for _ in ('u', 'g', 'r', 'i', 'z')],
+        required=False, label="Template band"
+    )
 
     filter_vizier = forms.BooleanField(initial=False, required=False, label="Filter Vizier catalogues")
     filter_skybot = forms.BooleanField(initial=False, required=False, label="Filter SkyBoT")
@@ -310,6 +314,7 @@ class TaskSubtractionForm(forms.Form):
                 Column('sub_size', css_class="col-md-2"),
                 Column('sub_overlap', css_class="col-md-2"),
                 Column('subtraction_method', css_class="col-md-2"),
+                Column('template_filter', css_class="col-md-auto"),
                 Column('hotpants_extra', id='hotpants_extra_col'),
                 css_class='align-items-end'
             ),
