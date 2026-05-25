@@ -439,6 +439,10 @@ def guess_catalogue_mag_columns(fname, cat):
     cat_col_mag = None
     cat_col_mag_err = None
 
+    # Cross-match helpers may return None on failures or no rows.
+    if cat is None:
+        return cat_col_mag, cat_col_mag_err
+
     # Most of augmented catalogues
     if f"{fname}mag" in cat.colnames:
         cat_col_mag = f"{fname}mag"
@@ -693,6 +697,15 @@ def filter_vizier_blends(
             col_ra=obj_col_ra,
             col_dec=obj_col_dec,
         )
+
+        # Some catalog queries may fail or return no rows; skip gracefully.
+        if xcat is None or not len(xcat):
+            log(
+                np.sum(cand_idx),
+                'remains after matching blends with',
+                catalogs.catalogs.get(catname, {'name': catname})['name'],
+            )
+            continue
 
         if fname is not None:
             # Find relevant magnitude and coordinate columns
@@ -1043,6 +1056,7 @@ def inspect_image(filename, config, verbose=True, show=False):
                             # --- TNS fallback (runs immediately here) ---
                             try:
                                 import csv, io, urllib.parse as _up, time as _time, re as _re
+                                import requests
 
                                 # Bare name without "AT "/"SN " prefix (TNS URLs use the bare name)
                                 bare_name = _re.sub(r'^(AT|SN)\s*', '', target['name'], flags=_re.IGNORECASE).strip()
@@ -1052,12 +1066,33 @@ def inspect_image(filename, config, verbose=True, show=False):
 
                                 _ua_headers = {"User-Agent": "Mozilla/5.0 (compatible; stdweb/1.0)"}
 
+                                def _get_with_retries(url, timeout, attempts=3, backoff_s=2):
+                                    last_exc = None
+                                    for i in range(attempts):
+                                        try:
+                                            return requests.get(
+                                                url,
+                                                headers=_ua_headers,
+                                                timeout=timeout,
+                                                allow_redirects=True,
+                                            )
+                                        except Exception as exc:
+                                            last_exc = exc
+                                            if i < attempts - 1:
+                                                delay = backoff_s * (i + 1)
+                                                log(
+                                                    f"TNS request failed ({type(exc).__name__}): {exc}. "
+                                                    f"Retry {i + 1}/{attempts - 1} in {delay}s"
+                                                )
+                                                _time.sleep(delay)
+                                    raise last_exc
+
                                 # --- Strategy 1: direct TNS object page (no auth required) ---
                                 # The public page at wis-tns.org/object/<name> embeds decimal
                                 # RA/Dec directly in the HTML, e.g. "131.52412414551 +10.794554710388"
                                 tns_obj_url = f"https://www.wis-tns.org/object/{_up.quote(bare_name)}"
                                 log(f"TNS object page: GET {tns_obj_url}")
-                                rr = requests.get(tns_obj_url, headers=_ua_headers, timeout=15, allow_redirects=True)
+                                rr = _get_with_retries(tns_obj_url, timeout=15, attempts=3, backoff_s=2)
                                 log(f"TNS object page: HTTP {rr.status_code} ({len(rr.content)} bytes)")
                                 if rr.status_code == 200:
                                     m = _re.search(r'\b(\d{2,3}\.\d{4,})\s+([+-]\d{1,2}\.\d{4,})\b', rr.text)
@@ -1076,7 +1111,7 @@ def inspect_image(filename, config, verbose=True, show=False):
                                             f"page={page}"
                                         )
                                         log(f"TNS page CSV: page={page} -> GET {url}")
-                                        rr = requests.get(url, headers=_ua_headers, timeout=20, allow_redirects=True)
+                                        rr = _get_with_retries(url, timeout=20, attempts=3, backoff_s=2)
                                         log(f"TNS page CSV: HTTP {rr.status_code} ({len(rr.content)} bytes)")
                                         if rr.status_code == 429:
                                             log("TNS page CSV: rate limited, stopping")
@@ -1708,52 +1743,57 @@ def photometry_image(filename, config, verbose=True, show=False):
     pickle_to_file(os.path.join(basepath, 'photometry.pickle'), m)
     log("Photometric solution stored to photometry.pickle")
 
-    # Plot photometric solution
-    with plots.figure_saver(os.path.join(basepath, 'photometry.png'), figsize=(8, 6), show=show) as fig:
-        ax = fig.add_subplot(2, 1, 1)
-        plots.plot_photometric_match(m, mode='mag', ax=ax)
-        ax = fig.add_subplot(2, 1, 2)
-        plots.plot_photometric_match(m, mode='color', ax=ax)
+    # Plot photometric solution.
+    # Matplotlib may occasionally fail inside celery worker shutdown/signal handlers
+    # (e.g. billiard SystemExit). Do not fail the full photometry task for diagnostics.
+    def _run_plot(plot_name, draw_fn, figsize=(8, 6)):
+        try:
+            with plots.figure_saver(os.path.join(basepath, plot_name), figsize=figsize, show=show) as fig:
+                draw_fn(fig)
+        except BaseException as e:
+            log(f"Warning: failed to generate {plot_name}: {type(e).__name__}: {e}")
 
-    with plots.figure_saver(os.path.join(basepath, 'photometry_unmasked.png'), figsize=(8, 6), show=show) as fig:
-        ax = fig.add_subplot(2, 1, 1)
-        plots.plot_photometric_match(m, mode='mag', show_masked=False, ax=ax)
-        ax.set_ylim(-0.4, 0.4)
-        ax = fig.add_subplot(2, 1, 2)
-        plots.plot_photometric_match(m, mode='color', show_masked=False, ax=ax)
-        ax.set_ylim(-0.4, 0.4)
+    _run_plot('photometry.png', lambda fig: (
+        (lambda ax: plots.plot_photometric_match(m, mode='mag', ax=ax))(fig.add_subplot(2, 1, 1)),
+        (lambda ax: plots.plot_photometric_match(m, mode='color', ax=ax))(fig.add_subplot(2, 1, 2))
+    ))
 
-    with plots.figure_saver(os.path.join(basepath, 'photometry_zeropoint.png'), figsize=(8, 6), show=show) as fig:
-        ax = fig.add_subplot(1, 1, 1)
-        plots.plot_photometric_match(m, mode='zero', show_dots=True, bins=8, ax=ax,
-                                     range=[[0, image.shape[1]], [0, image.shape[0]]])
-        ax.set_aspect(1)
-        ax.set_xlim(0, image.shape[1])
-        ax.set_ylim(0, image.shape[0])
+    _run_plot('photometry_unmasked.png', lambda fig: (
+        (lambda ax: (plots.plot_photometric_match(m, mode='mag', show_masked=False, ax=ax), ax.set_ylim(-0.4, 0.4)))(fig.add_subplot(2, 1, 1)),
+        (lambda ax: (plots.plot_photometric_match(m, mode='color', show_masked=False, ax=ax), ax.set_ylim(-0.4, 0.4)))(fig.add_subplot(2, 1, 2))
+    ))
 
-    with plots.figure_saver(os.path.join(basepath, 'photometry_model.png'), figsize=(8, 6), show=show) as fig:
-        ax = fig.add_subplot(1, 1, 1)
-        plots.plot_photometric_match(m, mode='model', show_dots=True, bins=8, ax=ax,
-                                     range=[[0, image.shape[1]], [0, image.shape[0]]])
-        ax.set_aspect(1)
-        ax.set_xlim(0, image.shape[1])
-        ax.set_ylim(0, image.shape[0])
+    _run_plot('photometry_zeropoint.png', lambda fig: (
+        (lambda ax: (
+            plots.plot_photometric_match(m, mode='zero', show_dots=True, bins=8, ax=ax,
+                                         range=[[0, image.shape[1]], [0, image.shape[0]]]),
+            ax.set_aspect(1), ax.set_xlim(0, image.shape[1]), ax.set_ylim(0, image.shape[0])
+        ))(fig.add_subplot(1, 1, 1))
+    ))
 
-    with plots.figure_saver(os.path.join(basepath, 'photometry_residuals.png'), figsize=(8, 6), show=show) as fig:
-        ax = fig.add_subplot(1, 1, 1)
-        plots.plot_photometric_match(m, mode='residuals', show_dots=True, bins=8, ax=ax,
-                                     range=[[0, image.shape[1]], [0, image.shape[0]]])
-        ax.set_aspect(1)
-        ax.set_xlim(0, image.shape[1])
-        ax.set_ylim(0, image.shape[0])
+    _run_plot('photometry_model.png', lambda fig: (
+        (lambda ax: (
+            plots.plot_photometric_match(m, mode='model', show_dots=True, bins=8, ax=ax,
+                                         range=[[0, image.shape[1]], [0, image.shape[0]]]),
+            ax.set_aspect(1), ax.set_xlim(0, image.shape[1]), ax.set_ylim(0, image.shape[0])
+        ))(fig.add_subplot(1, 1, 1))
+    ))
 
-    with plots.figure_saver(os.path.join(basepath, 'astrometry_dist.png'), figsize=(8, 6), show=show) as fig:
-        ax = fig.add_subplot(1, 1, 1)
-        plots.plot_photometric_match(m, mode='dist', show_dots=True, bins=8, ax=ax,
-                                     range=[[0, image.shape[1]], [0, image.shape[0]]])
-        ax.set_aspect(1)
-        ax.set_xlim(0, image.shape[1])
-        ax.set_ylim(0, image.shape[0])
+    _run_plot('photometry_residuals.png', lambda fig: (
+        (lambda ax: (
+            plots.plot_photometric_match(m, mode='residuals', show_dots=True, bins=8, ax=ax,
+                                         range=[[0, image.shape[1]], [0, image.shape[0]]]),
+            ax.set_aspect(1), ax.set_xlim(0, image.shape[1]), ax.set_ylim(0, image.shape[0])
+        ))(fig.add_subplot(1, 1, 1))
+    ))
+
+    _run_plot('astrometry_dist.png', lambda fig: (
+        (lambda ax: (
+            plots.plot_photometric_match(m, mode='dist', show_dots=True, bins=8, ax=ax,
+                                         range=[[0, image.shape[1]], [0, image.shape[0]]]),
+            ax.set_aspect(1), ax.set_xlim(0, image.shape[1]), ax.set_ylim(0, image.shape[0])
+        ))(fig.add_subplot(1, 1, 1))
+    ))
 
     # Apply photometry to objects
     # (It should already be done in calibrate_photometry(), but let's be verbose
@@ -1978,8 +2018,8 @@ def transients_simple_image(filename, config, verbose=True, show=False):
     obj = Table.read(os.path.join(basepath, 'objects.vot'))
     log(f"{len(obj)} objects loaded from file:objects.vot")
 
-    # Catalogue
-    # cat = Table.read(os.path.join(basepath, 'cat.vot'))
+    # Reference catalogue from photometric calibration
+    cat = Table.read(os.path.join(basepath, 'cat.vot'))
 
     # WCS
     wcs = get_wcs(filename, header=header, verbose=verbose)
@@ -2073,6 +2113,94 @@ def transients_simple_image(filename, config, verbose=True, show=False):
 
         return xidx
 
+    def rank_simple_candidates(xcand, xobj):
+        # Rank candidates by a mixed score robust against bright artefacts:
+        # S/N + morphology consistency with field stars + lightweight flag penalties.
+        if len(xcand) == 0:
+            return xcand
+
+        score = np.zeros(len(xcand), dtype=np.float64)
+
+        if 'flux' in xcand.colnames and 'fluxerr' in xcand.colnames:
+            flux = np.array(xcand['flux'], dtype=np.float64)
+            fluxerr = np.array(xcand['fluxerr'], dtype=np.float64)
+            sn = flux / np.maximum(fluxerr, 1e-9)
+            score += np.log10(1 + np.clip(sn, 0, None))
+
+        if 'mag_calib' in xcand.colnames:
+            mag = np.array(xcand['mag_calib'], dtype=np.float64)
+            mag0 = np.nanmedian(mag)
+            # Keep brightness contribution weak to avoid over-prioritizing saturated artefacts.
+            score += 0.2*np.clip((mag0 - mag)/2.0, -2, 2)
+
+        if 'fwhm' in xcand.colnames and 'fwhm' in xobj.colnames:
+            ref_fwhm = np.array(xobj['fwhm'], dtype=np.float64)
+            if 'flags' in xobj.colnames:
+                ref_idx = np.array(xobj['flags']) == 0
+            else:
+                ref_idx = np.ones(len(xobj), dtype=bool)
+
+            ref = ref_fwhm[ref_idx]
+            ref = ref[np.isfinite(ref) & (ref > 0)]
+
+            if len(ref) >= 10:
+                ref_med = np.nanmedian(ref)
+                ref_sigma = max(0.3, 0.5*(np.nanpercentile(ref, 84) - np.nanpercentile(ref, 16)))
+                cfwhm = np.array(xcand['fwhm'], dtype=np.float64)
+                score += 2.5*np.exp(-0.5*((cfwhm - ref_med)/ref_sigma)**2)
+                # Reject extremely sharp detections often associated with hot pixels/cosmics.
+                score -= 0.8*(cfwhm < 0.6*ref_med)
+
+        if 'flags' in xcand.colnames:
+            flags = np.array(xcand['flags'])
+            # Keep deblended sources but with a mild penalty.
+            score -= 0.2*((flags & 0x02) > 0)
+            # Strongly penalize suspicious flags beyond deblended/isophotal masked bits.
+            score -= 1.0*((flags & (0x7fff - 0x0100 - 0x02)) > 0)
+
+        xcand = xcand.copy()
+        xcand['transient_score'] = score
+        xcand.sort('transient_score', reverse=True)
+
+        log("Simple candidates ranked by transient_score (S/N + morphology + flags)")
+
+        return xcand
+
+    # Local catalogue pre-filter fallback.
+    # This avoids relying solely on external CDS XMatch availability in crowded fields.
+    if len(obj):
+        cat_col_ra, cat_col_dec = guess_catalogue_radec_columns(cat)
+        if cat_col_ra is None:
+            log("Cannot guess local catalogue coordinate columns, skipping local pre-filter")
+        else:
+            sr_match = 0.5 * fwhm * pixscale
+            oidx, cidx, _ = astrometry.spherical_match(
+                obj['ra'], obj['dec'],
+                cat[cat_col_ra], cat[cat_col_dec],
+                sr_match
+            )
+
+            if len(oidx):
+                remove_idx = oidx
+                if config.get('simple_mag_diff'):
+                    # Keep only matches that are not significantly brighter than catalogue.
+                    # This mirrors checker_fn logic used for remote catalogue cross-matches.
+                    cat_col_mag = config.get('cat_col_mag')
+                    if cat_col_mag in cat.colnames and 'mag_calib' in obj.colnames:
+                        diff = obj['mag_calib'][oidx] - cat[cat_col_mag][cidx]
+                        if len(diff[np.isfinite(diff)]) > 10:
+                            diff -= np.nanmedian(diff)
+                        keep_match = diff > -config.get('simple_mag_diff', 2.0)
+                        remove_idx = oidx[keep_match]
+                    else:
+                        log("Local catalogue pre-filter: magnitude columns missing, using positional-only match")
+
+                if len(remove_idx):
+                    keep = np.ones(len(obj), dtype=bool)
+                    keep[remove_idx] = False
+                    obj = obj[keep]
+                    log(f"{len(obj)} remains after matching with local reference catalogue")
+
     candidates = pipeline.filter_transient_candidates(
         obj,
         sr=0.5*fwhm*pixscale,
@@ -2099,7 +2227,9 @@ def transients_simple_image(filename, config, verbose=True, show=False):
             verbose=verbose
         )
 
-    # Restrict to 100 brightest ones if there are too many
+    candidates = rank_simple_candidates(candidates, obj)
+
+    # Restrict to 100 highest-ranked ones if there are too many
     if len(candidates) > 100:
         candidates = candidates[:100]
         log(f"Warning: too many candidates, limiting to first {len(candidates)}")

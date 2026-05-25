@@ -210,7 +210,10 @@ def tasks(request, id=None):
         if 'candidates_simple.vot' in context['files']:
             candidates_simple = Table.read(os.path.join(path, 'candidates_simple.vot'))
             if candidates_simple:
-                candidates_simple.sort('flux', reverse=True)
+                if 'transient_score' in candidates_simple.colnames:
+                    candidates_simple.sort('transient_score', reverse=True)
+                else:
+                    candidates_simple.sort('flux', reverse=True)
                 context['candidates_simple'] = candidates_simple
 
         if 'candidates.vot' in context['files']:
@@ -345,7 +348,10 @@ def task_candidates(request, id, filename='candidates.vot'):
     if os.path.exists(os.path.join(path, filename)):
         candidates = Table.read(os.path.join(path, filename))
         if candidates:
-            candidates.sort('flux', reverse=True)
+            if 'simple' in filename and 'transient_score' in candidates.colnames:
+                candidates.sort('transient_score', reverse=True)
+            else:
+                candidates.sort('flux', reverse=True)
             context['candidates'] = candidates
             context['filename'] = filename
 
