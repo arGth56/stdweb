@@ -1235,71 +1235,95 @@ def check_photometry_quality(basepath, config, m, target_obj, log=None):
     Run QA checks on a just-completed forced photometry measurement and store
     any warnings in config['photometry_warnings'].
 
-    Checks performed:
-    1. Color-term anomaly: compare this task's color term against the historical
-       median for the same filter (last 60 days), queried from the DB.
-    2. Cross-band self-consistency (G band only): look for sibling BP/RP tasks
-       for the same target on the same night (±4 h) and verify that
-       RP ≤ G ≤ BP (magnitudes).  A G > BP or G < RP signals a bad measurement.
+    Checks are filter-agnostic and work for any user/instrument:
+
+    1. Color-term anomaly: compare this task's color term against the
+       historical median for the same filter over the last 60 days.
+       A large shift in color term signals non-standard atmospheric
+       chromaticity (e.g. high airmass, thin clouds with wavelength-
+       dependent extinction).
+
+    2. Short-term light-curve consistency: compare the new measurement
+       against the linear trend extrapolated from the last 5 same-filter
+       measurements of the same target.  A large deviation flags a
+       potential bad measurement even when the photometric calibration
+       itself looks formally good.
+
+    3. Gaia broadband ordering (only when catalogue is gaiaedr3): for any
+       object with a positive SED, the G passband always collects more flux
+       than the narrower BP or RP passbands, so G must be at least as bright
+       as both.  G > BP or G < RP is physically impossible and signals either
+       a template subtraction artefact or an observing condition problem
+       specific to that exposure.
     """
     if log is None:
         log = print
 
     warnings = []
 
-    # ------------------------------------------------------------------ #
-    # Check 1 – color term anomaly                                         #
-    # ------------------------------------------------------------------ #
     filt = config.get('filter')
-    current_term = getattr(m, 'get', lambda k, d=None: m.get(k, d) if isinstance(m, dict) else d)('color_term', None)
-    if current_term is None and isinstance(m, dict):
-        current_term = m.get('color_term')
+    cat_name = config.get('cat_name', '')
+    target_ra = config.get('target_ra')
 
+    current_term = m.get('color_term') if isinstance(m, dict) else None
+    current_mag = None
+    if len(target_obj) > 0 and 'mag_calib' in target_obj.colnames:
+        v = float(target_obj['mag_calib'][0])
+        current_mag = v if np.isfinite(v) else None
+
+    # Helper: read the best available calibrated magnitude from a task path
+    def _read_mag(task_path):
+        for fname in ('sub_target.vot', 'target.vot'):
+            p = os.path.join(task_path, fname)
+            if os.path.exists(p):
+                try:
+                    from astropy.table import Table as _Table
+                    tbl = _Table.read(p)
+                    if 'mag_calib' in tbl.colnames and len(tbl):
+                        ct = float(tbl['mag_color_term'][0]) if 'mag_color_term' in tbl.colnames else None
+                        mv = float(tbl['mag_calib'][0])
+                        return mv if np.isfinite(mv) else None, ct
+                except Exception:
+                    pass
+        return None, None
+
+    # ------------------------------------------------------------------ #
+    # Check 1 – color-term anomaly (any filter)                           #
+    # ------------------------------------------------------------------ #
     if current_term is not None and filt:
         try:
             from django.apps import apps
             Task = apps.get_model('stdweb', 'Task')
-            from astropy.time import Time as _Time
             import datetime as _dt
 
             cutoff = _dt.datetime.utcnow() - _dt.timedelta(days=60)
-            prev_tasks = Task.objects.filter(
-                config__filter=filt,
-                created__gte=cutoff,
-                state__in=['photometry_done', 'subtraction_done', 'done'],
-            ).exclude(id=config.get('_task_id'))
+            prev_tasks = (
+                Task.objects
+                .filter(config__filter=filt, created__gte=cutoff,
+                        state__in=['photometry_done', 'subtraction_done', 'done'])
+                .exclude(id=config.get('_task_id'))
+                .order_by('-created')[:300]
+            )
 
             terms = []
-            for t in prev_tasks[:200]:
-                vot_path = None
-                for fname in ('sub_target.vot', 'target.vot'):
-                    candidate = os.path.join(t.path(), fname)
-                    if os.path.exists(candidate):
-                        vot_path = candidate
-                        break
-                if vot_path is None:
-                    continue
-                try:
-                    from astropy.table import Table as _Table
-                    tbl = _Table.read(vot_path)
-                    if 'mag_color_term' in tbl.colnames and len(tbl):
-                        ct = float(tbl['mag_color_term'][0])
-                        if np.isfinite(ct):
-                            terms.append(ct)
-                except Exception:
-                    pass
+            for t in prev_tasks:
+                _, ct = _read_mag(t.path())
+                if ct is not None:
+                    terms.append(ct)
 
             if len(terms) >= 5:
-                hist_median = float(np.median(terms))
-                hist_mad = float(np.median(np.abs(np.array(terms) - hist_median)))
-                threshold = max(0.08, 4 * hist_mad)
+                arr = np.array(terms)
+                hist_median = float(np.median(arr))
+                hist_mad = float(np.median(np.abs(arr - hist_median)))
+                threshold = max(0.08, 4.0 * hist_mad)
                 deviation = abs(current_term - hist_median)
                 if deviation > threshold:
                     msg = (
-                        f"Color term anomaly in {filt} band: "
+                        f"Color term anomaly ({filt} band): "
                         f"current={current_term:.3f}, "
-                        f"historical median={hist_median:.3f} "
-                        f"(deviation {deviation:.3f} > threshold {threshold:.3f})"
+                        f"historical median={hist_median:.3f} over {len(terms)} tasks "
+                        f"(|deviation|={deviation:.3f} > threshold={threshold:.3f}). "
+                        f"Possible non-standard atmospheric chromaticity."
                     )
                     log(f"Warning: {msg}")
                     warnings.append({'level': 'warning', 'check': 'color_term', 'message': msg})
@@ -1307,104 +1331,148 @@ def check_photometry_quality(basepath, config, m, target_obj, log=None):
             log(f"check_photometry_quality: color-term check skipped ({e})")
 
     # ------------------------------------------------------------------ #
-    # Check 2 – G band cross-band consistency                              #
+    # Check 2 – short-term light-curve consistency (any filter)           #
     # ------------------------------------------------------------------ #
-    if filt == 'G' and len(target_obj) > 0 and 'mag_calib' in target_obj.colnames:
-        g_mag = float(target_obj['mag_calib'][0])
-        if np.isfinite(g_mag):
-            try:
-                from django.apps import apps
-                Task = apps.get_model('stdweb', 'Task')
-                from astropy.time import Time as _Time
-                import datetime as _dt
+    if current_mag is not None and filt and target_ra is not None:
+        try:
+            from django.apps import apps
+            Task = apps.get_model('stdweb', 'Task')
+            from astropy.time import Time as _Time
+            import datetime as _dt
 
-                obs_time_str = config.get('time')
-                if obs_time_str:
-                    obs_time = _Time(obs_time_str)
-                    obs_dt = obs_time.to_datetime()
-                    window = _dt.timedelta(hours=4)
+            obs_time_str = config.get('time')
+            if obs_time_str:
+                obs_mjd = _Time(obs_time_str).mjd
+                cutoff = _dt.datetime.utcnow() - _dt.timedelta(days=14)
+                prev_tasks = (
+                    Task.objects
+                    .filter(config__filter=filt,
+                            config__target_ra=target_ra,
+                            created__gte=cutoff,
+                            state__in=['photometry_done', 'subtraction_done', 'done'])
+                    .exclude(id=config.get('_task_id'))
+                    .order_by('-created')[:20]
+                )
 
-                    target_ra = config.get('target_ra')
-                    target_dec = config.get('target_dec')
+                mjds, mags = [], []
+                for t in prev_tasks:
+                    t_obs_str = t.config.get('time')
+                    if not t_obs_str:
+                        continue
+                    try:
+                        t_mjd = _Time(t_obs_str).mjd
+                    except Exception:
+                        continue
+                    mv, _ = _read_mag(t.path())
+                    if mv is not None:
+                        mjds.append(t_mjd)
+                        mags.append(mv)
 
-                    # Widen the creation-time window to cover cases where images
-                    # are processed long after they were taken (next morning, etc.)
-                    sibling_tasks = Task.objects.filter(
-                        config__filter__in=['BP', 'RP'],
+                # Need at least 3 prior points to fit a trend
+                if len(mjds) >= 3:
+                    mjds_arr = np.array(mjds)
+                    mags_arr = np.array(mags)
+                    # Linear fit to recent points
+                    coeffs = np.polyfit(mjds_arr, mags_arr, 1)
+                    predicted = np.polyval(coeffs, obs_mjd)
+                    residuals = mags_arr - np.polyval(coeffs, mjds_arr)
+                    trend_rms = float(np.std(residuals))
+                    deviation = abs(current_mag - predicted)
+                    # Flag if deviation > max(5×trend_rms, 0.3 mag)
+                    threshold = max(5.0 * trend_rms, 0.3)
+                    if deviation > threshold:
+                        direction = "brighter" if current_mag < predicted else "fainter"
+                        msg = (
+                            f"Light-curve outlier ({filt} band): "
+                            f"measured={current_mag:.3f}, "
+                            f"trend prediction={predicted:.3f} "
+                            f"({direction} by {deviation:.3f} mag, "
+                            f"threshold={threshold:.3f} based on {len(mjds)} recent points, "
+                            f"trend_rms={trend_rms:.3f}). "
+                            f"Consider verifying image quality."
+                        )
+                        log(f"Warning: {msg}")
+                        warnings.append({'level': 'warning', 'check': 'lightcurve_trend', 'message': msg})
+        except Exception as e:
+            log(f"check_photometry_quality: light-curve trend check skipped ({e})")
+
+    # ------------------------------------------------------------------ #
+    # Check 3 – Gaia broadband ordering (only for gaiaedr3 catalogue)     #
+    # G passband spans the full BP+RP range, so G flux ≥ BP flux and      #
+    # G flux ≥ RP flux for any positive SED: G must be brighter than both.#
+    # This is true regardless of object colour or instrument.             #
+    # ------------------------------------------------------------------ #
+    is_gaia_g = (
+        current_mag is not None
+        and 'gaia' in cat_name.lower()
+        and config.get('cat_col_mag', '').lower() in ('gmag', 'g', 'g_mean_mag')
+    )
+    if is_gaia_g:
+        try:
+            from django.apps import apps
+            Task = apps.get_model('stdweb', 'Task')
+            from astropy.time import Time as _Time
+            import datetime as _dt
+
+            obs_time_str = config.get('time')
+            if obs_time_str and target_ra is not None:
+                obs_dt = _Time(obs_time_str).to_datetime()
+                # Find BP and RP sibling tasks for the same target (±4 h obs time)
+                sibling_tasks = (
+                    Task.objects
+                    .filter(
+                        config__target_ra=target_ra,
+                        config__cat_col_mag__in=['BPmag', 'RPmag', 'BP', 'RP',
+                                                  'phot_bp_mean_mag', 'phot_rp_mean_mag'],
                         created__gte=obs_dt - _dt.timedelta(days=2),
                         created__lte=obs_dt + _dt.timedelta(days=2),
                         state__in=['photometry_done', 'subtraction_done', 'done'],
                     )
-                    if target_ra is not None:
-                        sibling_tasks = sibling_tasks.filter(config__target_ra=target_ra)
+                )
 
-                    bp_mag = rp_mag = None
-                    for t in sibling_tasks:
-                        tf = t.config.get('filter')
-                        # Check the actual observation time is within 4 hours
-                        t_obs_str = t.config.get('time')
-                        if t_obs_str:
-                            try:
-                                t_obs = _Time(t_obs_str).to_datetime()
-                                if abs((t_obs - obs_dt).total_seconds()) > 4 * 3600:
-                                    continue
-                            except Exception:
-                                pass
-                        for fname in ('sub_target.vot', 'target.vot'):
-                            candidate = os.path.join(t.path(), fname)
-                            if os.path.exists(candidate):
-                                try:
-                                    from astropy.table import Table as _Table
-                                    tbl = _Table.read(candidate)
-                                    if 'mag_calib' in tbl.colnames and len(tbl):
-                                        mv = float(tbl['mag_calib'][0])
-                                        if np.isfinite(mv):
-                                            if tf == 'BP':
-                                                bp_mag = mv
-                                            elif tf == 'RP':
-                                                rp_mag = mv
-                                except Exception:
-                                    pass
-                                break
+                bp_mag = rp_mag = None
+                for t in sibling_tasks:
+                    t_obs_str = t.config.get('time')
+                    if t_obs_str:
+                        try:
+                            t_obs = _Time(t_obs_str).to_datetime()
+                            if abs((t_obs - obs_dt).total_seconds()) > 4 * 3600:
+                                continue
+                        except Exception:
+                            pass
+                    col = t.config.get('cat_col_mag', '').lower()
+                    mv, _ = _read_mag(t.path())
+                    if mv is None:
+                        continue
+                    if col in ('bpmag', 'bp', 'phot_bp_mean_mag'):
+                        bp_mag = mv
+                    elif col in ('rpmag', 'rp', 'phot_rp_mean_mag'):
+                        rp_mag = mv
 
-                    if bp_mag is not None:
-                        if g_mag > bp_mag:
-                            delta = g_mag - bp_mag
-                            msg = (
-                                f"G band is fainter than BP — physically impossible for a stellar SED: "
-                                f"G={g_mag:.3f} > BP={bp_mag:.3f} (G-BP={delta:+.3f}). "
-                                f"Likely poor atmospheric conditions or bad template subtraction during G exposure."
-                            )
-                            log(f"Warning: {msg}")
-                            warnings.append({'level': 'danger', 'check': 'G_vs_BP', 'message': msg})
-                        elif rp_mag is not None and g_mag < rp_mag:
-                            delta = rp_mag - g_mag
-                            msg = (
-                                f"G band is brighter than RP — physically unexpected: "
-                                f"G={g_mag:.3f} < RP={rp_mag:.3f} (G-RP={-delta:+.3f}). "
-                                f"Check calibration."
-                            )
-                            log(f"Warning: {msg}")
-                            warnings.append({'level': 'warning', 'check': 'G_vs_RP', 'message': msg})
+                g_mag = current_mag
+                if bp_mag is not None and g_mag > bp_mag:
+                    delta = g_mag - bp_mag
+                    msg = (
+                        f"Gaia G is fainter than BP (physically impossible): "
+                        f"G={g_mag:.3f} > BP={bp_mag:.3f} (ΔG-BP={delta:+.3f} mag). "
+                        f"The G passband contains all BP wavelengths — this signals a "
+                        f"template subtraction residual or exposure-specific problem."
+                    )
+                    log(f"Warning: {msg}")
+                    warnings.append({'level': 'danger', 'check': 'gaia_G_vs_BP', 'message': msg})
 
-                    if bp_mag is not None and rp_mag is not None:
-                        # Expected G from simple flux mixture (rough Gaia approximation)
-                        f_bp = 10 ** (-bp_mag / 2.5)
-                        f_rp = 10 ** (-rp_mag / 2.5)
-                        g_expected = -2.5 * np.log10(0.5 * (f_bp + f_rp))
-                        residual = g_mag - g_expected
-                        if abs(residual) > 0.25:
-                            msg = (
-                                f"G magnitude deviates significantly from BP/RP expectation: "
-                                f"G_obs={g_mag:.3f}, G_expected~{g_expected:.3f} "
-                                f"(residual {residual:+.3f} mag). "
-                                f"BP={bp_mag:.3f}, RP={rp_mag:.3f}."
-                            )
-                            log(f"Warning: {msg}")
-                            if not any(w['check'] == 'G_vs_BP' for w in warnings):
-                                warnings.append({'level': 'warning', 'check': 'G_consistency', 'message': msg})
-            except Exception as e:
-                log(f"check_photometry_quality: cross-band check skipped ({e})")
+                if rp_mag is not None and g_mag < rp_mag:
+                    delta = rp_mag - g_mag
+                    msg = (
+                        f"Gaia G is brighter than RP (physically impossible): "
+                        f"G={g_mag:.3f} < RP={rp_mag:.3f} (ΔG-RP={-delta:+.3f} mag). "
+                        f"Check calibration or template subtraction."
+                    )
+                    log(f"Warning: {msg}")
+                    warnings.append({'level': 'danger', 'check': 'gaia_G_vs_RP', 'message': msg})
+
+        except Exception as e:
+            log(f"check_photometry_quality: Gaia ordering check skipped ({e})")
 
     if warnings:
         config['photometry_warnings'] = warnings
