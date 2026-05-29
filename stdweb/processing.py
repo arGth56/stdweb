@@ -1230,6 +1230,190 @@ def inspect_image(filename, config, verbose=True, show=False):
         log(f"MJD is {Time(config.get('time')).mjd}")
 
 
+def check_photometry_quality(basepath, config, m, target_obj, log=None):
+    """
+    Run QA checks on a just-completed forced photometry measurement and store
+    any warnings in config['photometry_warnings'].
+
+    Checks performed:
+    1. Color-term anomaly: compare this task's color term against the historical
+       median for the same filter (last 60 days), queried from the DB.
+    2. Cross-band self-consistency (G band only): look for sibling BP/RP tasks
+       for the same target on the same night (±4 h) and verify that
+       RP ≤ G ≤ BP (magnitudes).  A G > BP or G < RP signals a bad measurement.
+    """
+    if log is None:
+        log = print
+
+    warnings = []
+
+    # ------------------------------------------------------------------ #
+    # Check 1 – color term anomaly                                         #
+    # ------------------------------------------------------------------ #
+    filt = config.get('filter')
+    current_term = getattr(m, 'get', lambda k, d=None: m.get(k, d) if isinstance(m, dict) else d)('color_term', None)
+    if current_term is None and isinstance(m, dict):
+        current_term = m.get('color_term')
+
+    if current_term is not None and filt:
+        try:
+            from django.apps import apps
+            Task = apps.get_model('stdweb', 'Task')
+            from astropy.time import Time as _Time
+            import datetime as _dt
+
+            cutoff = _dt.datetime.utcnow() - _dt.timedelta(days=60)
+            prev_tasks = Task.objects.filter(
+                config__filter=filt,
+                created__gte=cutoff,
+                state__in=['photometry_done', 'subtraction_done', 'done'],
+            ).exclude(id=config.get('_task_id'))
+
+            terms = []
+            for t in prev_tasks[:200]:
+                vot_path = None
+                for fname in ('sub_target.vot', 'target.vot'):
+                    candidate = os.path.join(t.path(), fname)
+                    if os.path.exists(candidate):
+                        vot_path = candidate
+                        break
+                if vot_path is None:
+                    continue
+                try:
+                    from astropy.table import Table as _Table
+                    tbl = _Table.read(vot_path)
+                    if 'mag_color_term' in tbl.colnames and len(tbl):
+                        ct = float(tbl['mag_color_term'][0])
+                        if np.isfinite(ct):
+                            terms.append(ct)
+                except Exception:
+                    pass
+
+            if len(terms) >= 5:
+                hist_median = float(np.median(terms))
+                hist_mad = float(np.median(np.abs(np.array(terms) - hist_median)))
+                threshold = max(0.08, 4 * hist_mad)
+                deviation = abs(current_term - hist_median)
+                if deviation > threshold:
+                    msg = (
+                        f"Color term anomaly in {filt} band: "
+                        f"current={current_term:.3f}, "
+                        f"historical median={hist_median:.3f} "
+                        f"(deviation {deviation:.3f} > threshold {threshold:.3f})"
+                    )
+                    log(f"Warning: {msg}")
+                    warnings.append({'level': 'warning', 'check': 'color_term', 'message': msg})
+        except Exception as e:
+            log(f"check_photometry_quality: color-term check skipped ({e})")
+
+    # ------------------------------------------------------------------ #
+    # Check 2 – G band cross-band consistency                              #
+    # ------------------------------------------------------------------ #
+    if filt == 'G' and len(target_obj) > 0 and 'mag_calib' in target_obj.colnames:
+        g_mag = float(target_obj['mag_calib'][0])
+        if np.isfinite(g_mag):
+            try:
+                from django.apps import apps
+                Task = apps.get_model('stdweb', 'Task')
+                from astropy.time import Time as _Time
+                import datetime as _dt
+
+                obs_time_str = config.get('time')
+                if obs_time_str:
+                    obs_time = _Time(obs_time_str)
+                    obs_dt = obs_time.to_datetime()
+                    window = _dt.timedelta(hours=4)
+
+                    target_ra = config.get('target_ra')
+                    target_dec = config.get('target_dec')
+
+                    # Widen the creation-time window to cover cases where images
+                    # are processed long after they were taken (next morning, etc.)
+                    sibling_tasks = Task.objects.filter(
+                        config__filter__in=['BP', 'RP'],
+                        created__gte=obs_dt - _dt.timedelta(days=2),
+                        created__lte=obs_dt + _dt.timedelta(days=2),
+                        state__in=['photometry_done', 'subtraction_done', 'done'],
+                    )
+                    if target_ra is not None:
+                        sibling_tasks = sibling_tasks.filter(config__target_ra=target_ra)
+
+                    bp_mag = rp_mag = None
+                    for t in sibling_tasks:
+                        tf = t.config.get('filter')
+                        # Check the actual observation time is within 4 hours
+                        t_obs_str = t.config.get('time')
+                        if t_obs_str:
+                            try:
+                                t_obs = _Time(t_obs_str).to_datetime()
+                                if abs((t_obs - obs_dt).total_seconds()) > 4 * 3600:
+                                    continue
+                            except Exception:
+                                pass
+                        for fname in ('sub_target.vot', 'target.vot'):
+                            candidate = os.path.join(t.path(), fname)
+                            if os.path.exists(candidate):
+                                try:
+                                    from astropy.table import Table as _Table
+                                    tbl = _Table.read(candidate)
+                                    if 'mag_calib' in tbl.colnames and len(tbl):
+                                        mv = float(tbl['mag_calib'][0])
+                                        if np.isfinite(mv):
+                                            if tf == 'BP':
+                                                bp_mag = mv
+                                            elif tf == 'RP':
+                                                rp_mag = mv
+                                except Exception:
+                                    pass
+                                break
+
+                    if bp_mag is not None:
+                        if g_mag > bp_mag:
+                            delta = g_mag - bp_mag
+                            msg = (
+                                f"G band is fainter than BP — physically impossible for a stellar SED: "
+                                f"G={g_mag:.3f} > BP={bp_mag:.3f} (G-BP={delta:+.3f}). "
+                                f"Likely poor atmospheric conditions or bad template subtraction during G exposure."
+                            )
+                            log(f"Warning: {msg}")
+                            warnings.append({'level': 'danger', 'check': 'G_vs_BP', 'message': msg})
+                        elif rp_mag is not None and g_mag < rp_mag:
+                            delta = rp_mag - g_mag
+                            msg = (
+                                f"G band is brighter than RP — physically unexpected: "
+                                f"G={g_mag:.3f} < RP={rp_mag:.3f} (G-RP={-delta:+.3f}). "
+                                f"Check calibration."
+                            )
+                            log(f"Warning: {msg}")
+                            warnings.append({'level': 'warning', 'check': 'G_vs_RP', 'message': msg})
+
+                    if bp_mag is not None and rp_mag is not None:
+                        # Expected G from simple flux mixture (rough Gaia approximation)
+                        f_bp = 10 ** (-bp_mag / 2.5)
+                        f_rp = 10 ** (-rp_mag / 2.5)
+                        g_expected = -2.5 * np.log10(0.5 * (f_bp + f_rp))
+                        residual = g_mag - g_expected
+                        if abs(residual) > 0.25:
+                            msg = (
+                                f"G magnitude deviates significantly from BP/RP expectation: "
+                                f"G_obs={g_mag:.3f}, G_expected~{g_expected:.3f} "
+                                f"(residual {residual:+.3f} mag). "
+                                f"BP={bp_mag:.3f}, RP={rp_mag:.3f}."
+                            )
+                            log(f"Warning: {msg}")
+                            if not any(w['check'] == 'G_vs_BP' for w in warnings):
+                                warnings.append({'level': 'warning', 'check': 'G_consistency', 'message': msg})
+            except Exception as e:
+                log(f"check_photometry_quality: cross-band check skipped ({e})")
+
+    if warnings:
+        config['photometry_warnings'] = warnings
+        log(f"Photometry quality check: {len(warnings)} warning(s) raised.")
+    else:
+        config.pop('photometry_warnings', None)
+        log("Photometry quality check passed.")
+
+
 def photometry_image(filename, config, verbose=True, show=False):
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
@@ -1936,6 +2120,9 @@ def photometry_image(filename, config, verbose=True, show=False):
 
         target_obj.write(os.path.join(basepath, 'target.vot'), format='votable', overwrite=True)
         log("Measured targets stored to file:target.vot")
+
+        # Quality checks on photometry result
+        check_photometry_quality(basepath, config, m, target_obj, log=log)
 
         # Create the cutouts from image based on the targets
         for i,tobj in enumerate(target_obj):
@@ -2725,6 +2912,9 @@ def subtract_image(filename, config, verbose=True, show=False):
 
             target_obj.write(os.path.join(basepath, 'sub_target.vot'), format='votable', overwrite=True)
             log("Measured target stored to file:sub_target.vot")
+
+            # Quality checks on subtraction photometry result
+            check_photometry_quality(basepath, config, m, target_obj, log=log)
 
             # Create the cutout from image based on the candidate
             cutout = cutouts.get_cutout(

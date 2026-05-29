@@ -106,6 +106,7 @@ def task_photometry(self, id, finalize=True):
     basepath = task.path()
 
     config = task.config
+    config['_task_id'] = task.id
 
     log = partial(processing.print_to_file, logname=os.path.join(basepath, 'photometry.log'))
     log(clear=True)
@@ -166,6 +167,7 @@ def task_subtraction(self, id, finalize=True):
     basepath = task.path()
 
     config = task.config
+    config['_task_id'] = task.id
 
     log = partial(processing.print_to_file, logname=os.path.join(basepath, 'subtraction.log'))
     log(clear=True)

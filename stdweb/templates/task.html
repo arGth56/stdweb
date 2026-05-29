@@ -472,6 +472,23 @@
 
     {% endif %}
 
+    <!-- Photometry quality warnings -->
+    {% if photometry_warnings %}
+      <div class="mb-3">
+        {% for w in photometry_warnings %}
+          <div class="alert alert-{{ w.level }} d-flex align-items-start gap-2" role="alert">
+            <span class="fs-5">
+              {% if w.level == 'danger' %}⚠️{% else %}⚠{% endif %}
+            </span>
+            <div>
+              <strong>Photometry QA — {{ w.check }}</strong><br>
+              {{ w.message }}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
     <!-- Target cutout -->
     {% if target_cutouts %}
       {% if perms.stdweb.skyportal_upload and settings.SKYPORTAL_TOKEN %}
@@ -678,6 +695,16 @@
 
     <!-- Target cutout -->
     {% if 'sub_target.cutout' in files %}
+      {% if photometry_warnings %}
+        <div class="mb-3">
+          {% for w in photometry_warnings %}
+            <div class="alert alert-{{ w.level }} d-flex align-items-start gap-2" role="alert">
+              <span class="fs-5">{% if w.level == 'danger' %}⚠️{% else %}⚠{% endif %}</span>
+              <div><strong>Photometry QA — {{ w.check }}</strong><br>{{ w.message }}</div>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
       {% if perms.stdweb.skyportal_upload and settings.SKYPORTAL_TOKEN %}
         {% if user_may_submit and not task.celery_id %}
           <form action="{% url 'skyportal' %}" method="POST" class="mb-2">

@@ -207,6 +207,9 @@ def tasks(request, id=None):
         context['supported_catalogs'] = processing.supported_catalogs
         context['supported_templates'] = processing.supported_templates
 
+        # Photometry quality warnings (stored in config by check_photometry_quality)
+        context['photometry_warnings'] = task.config.get('photometry_warnings', [])
+
         if 'candidates_simple.vot' in context['files']:
             candidates_simple = Table.read(os.path.join(path, 'candidates_simple.vot'))
             if candidates_simple:
