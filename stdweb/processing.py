@@ -2821,6 +2821,13 @@ def subtract_image(filename, config, verbose=True, show=False):
 
             tmask |= np.isnan(tmpl)
 
+            # Check that the template has enough valid (non-NaN) pixels to be usable
+            valid_frac = np.mean(~tmask)
+            if valid_frac < 0.1:
+                log(f"Warning: template from {tconf['name']} for sub-image {i} has only "
+                    f"{valid_frac:.1%} valid pixels — field likely not covered by this survey, skipping")
+                continue
+
         elif tname == 'custom':
             log("Re-projecting custom template onto sub-image")
 
