@@ -89,6 +89,9 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
+        'OPTIONS': {
+            'timeout': 30,  # seconds to wait before raising "database is locked"
+        },
     }
 }
 
@@ -195,7 +198,7 @@ STDPIPE_PSFEX = config('STDPIPE_PSFEX', default=None)
 # Path to PSFEx executable
 STDPIPE_HOTPANTS = config('STDPIPE_HOTPANTS', default='/usr/local/bin/hotpants')
 # Path to SWarp executable
-STDPIPE_SWARP = config('STDPIPE_SWARP', default=None)
+STDPIPE_SWARP = config('STDPIPE_SWARP', default='/usr/local/bin/swarp')
 # Path to store PS1 download cache (if not set, use task-local cache)
 STDPIPE_PS1_CACHE = config('STDPIPE_PS1_CACHE', default=None)
 

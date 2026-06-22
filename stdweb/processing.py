@@ -779,22 +779,22 @@ def inspect_image(filename, config, verbose=True, show=False):
     # Cleanup stale plots
     cleanup_paths(cleanup_inspect, basepath=basepath)
 
-    config['sn'] = config.get('sn', 5)
-    config['initial_aper'] = config.get('initial_aper', 3)
-    config['initial_r0'] = config.get('initial_r0', 0)
-    config['rel_aper'] = config.get('rel_aper', 1)
-    config['rel_bg1'] = config.get('rel_bg1', 5)
-    config['rel_bg2'] = config.get('rel_bg2', 7)
-    config['spatial_order'] = config.get('spatial_order', 2)
-    config['minarea'] = config.get('minarea', 5)
-    config['use_color'] = config.get('use_color', True)
-    config['refine_wcs'] = config.get('refine_wcs', True)
-    config['blind_match_wcs'] = config.get('blind_match_wcs', False)
-    config['hotpants_extra'] = config.get('hotpants_extra', {'ko':0, 'bgo':0})
-    config['sub_size'] = config.get('sub_size', 1000)
-    config['sub_overlap'] = config.get('sub_overlap', 50)
-    config['sub_verbose'] = config.get('sub_verbose', False)
-    config['subtraction_mode'] = config.get('subtraction_mode', 'detection')
+    config['sn'] = config.get('sn') or 5
+    config['initial_aper'] = config.get('initial_aper') or 3
+    config['initial_r0'] = config.get('initial_r0') if config.get('initial_r0') is not None else 0
+    config['rel_aper'] = config.get('rel_aper') or 1
+    config['rel_bg1'] = config.get('rel_bg1') or 5
+    config['rel_bg2'] = config.get('rel_bg2') or 7
+    config['spatial_order'] = config.get('spatial_order') if config.get('spatial_order') is not None else 2
+    config['minarea'] = config.get('minarea') or 5
+    config['use_color'] = config.get('use_color') if config.get('use_color') is not None else True
+    config['refine_wcs'] = config.get('refine_wcs') if config.get('refine_wcs') is not None else True
+    config['blind_match_wcs'] = config.get('blind_match_wcs') if config.get('blind_match_wcs') is not None else False
+    config['hotpants_extra'] = config.get('hotpants_extra') or {'ko':0, 'bgo':0}
+    config['sub_size'] = config.get('sub_size') or 1000
+    config['sub_overlap'] = config.get('sub_overlap') if config.get('sub_overlap') is not None else 50
+    config['sub_verbose'] = config.get('sub_verbose') if config.get('sub_verbose') is not None else False
+    config['subtraction_mode'] = config.get('subtraction_mode') or 'detection'
 
     # Fix some initial problems with the image like compression etc
     pre_fix_image(filename, verbose=verbose)
@@ -1509,6 +1509,24 @@ def photometry_image(filename, config, verbose=True, show=False):
     if not 'targets' in config and 'target_ra' in config and 'target_dec' in config:
         config['targets'] = [{'ra': config.get('target_ra'), 'dec': config.get('target_dec')}]
 
+    # Normalize config: replace None (from optional form fields) with safe defaults
+    config['sn'] = config.get('sn') or 5
+    config['initial_aper'] = config.get('initial_aper') or 3
+    config['initial_r0'] = config.get('initial_r0') if config.get('initial_r0') is not None else 0
+    config['rel_aper'] = config.get('rel_aper') or 1
+    config['rel_bg1'] = config.get('rel_bg1') or 5
+    config['rel_bg2'] = config.get('rel_bg2') or 7
+    config['spatial_order'] = config.get('spatial_order') if config.get('spatial_order') is not None else 2
+    config['minarea'] = config.get('minarea') or 5
+    config['use_color'] = config.get('use_color') if config.get('use_color') is not None else True
+    config['refine_wcs'] = config.get('refine_wcs') if config.get('refine_wcs') is not None else True
+    config['blind_match_wcs'] = config.get('blind_match_wcs') if config.get('blind_match_wcs') is not None else False
+    config['hotpants_extra'] = config.get('hotpants_extra') or {'ko':0, 'bgo':0}
+    config['sub_size'] = config.get('sub_size') or 1000
+    config['sub_overlap'] = config.get('sub_overlap') if config.get('sub_overlap') is not None else 50
+    config['sub_verbose'] = config.get('sub_verbose') if config.get('sub_verbose') is not None else False
+    config['subtraction_mode'] = config.get('subtraction_mode') or 'detection'
+
     # Cleanup stale plots
     cleanup_paths(cleanup_photometry, basepath=basepath)
 
@@ -2134,7 +2152,34 @@ def photometry_image(filename, config, verbose=True, show=False):
             'ra': [_['ra'] for _ in config['targets']],
             'dec': [_['dec'] for _ in config['targets']]
         })
-        target_obj['x'],target_obj['y'] = wcs.all_world2pix(target_obj['ra'], target_obj['dec'], 0)
+
+        # Pre-check: ensure the primary target is within the image field before
+        # calling all_world2pix — a target far outside the field causes the WCS
+        # SIP distortion solver to fail to converge with a cryptic error.
+        field_ra  = config.get('field_ra',  wcs.wcs.crval[0])
+        field_dec = config.get('field_dec', wcs.wcs.crval[1])
+        field_sr  = config.get('field_sr',  0.5)
+        from astropy.coordinates import SkyCoord
+        import astropy.units as u
+        field_center  = SkyCoord(field_ra, field_dec, unit='deg')
+        primary_coord = SkyCoord(target_obj['ra'][0], target_obj['dec'][0], unit='deg')
+        separation_deg = field_center.separation(primary_coord).deg
+        if separation_deg > field_sr * 2:
+            raise RuntimeError(
+                f"Primary target ({target_obj['ra'][0]:.4f}, {target_obj['dec'][0]:.4f}) "
+                f"is {separation_deg:.2f}° away from the image center "
+                f"({field_ra:.4f}, {field_dec:.4f}) — image field radius is only "
+                f"{field_sr:.3f}°. Please check that the correct image was uploaded "
+                f"and that the target coordinates match the field."
+            )
+
+        try:
+            target_obj['x'],target_obj['y'] = wcs.all_world2pix(target_obj['ra'], target_obj['dec'], 0)
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not project target ({target_obj['ra'][0]:.4f}, {target_obj['dec'][0]:.4f}) "
+                f"onto image WCS (field center {field_ra:.4f}, {field_dec:.4f}): {e}"
+            ) from e
 
         # Filter out targets outside the image so that photometry routine does not crash
         def is_inside(x, y):
@@ -2555,8 +2600,21 @@ def subtract_image(filename, config, verbose=True, show=False):
         _cachedir = os.path.join(basepath, 'cache')
 
     sub_verbose = verbose if config.get('sub_verbose') else False
-    subtraction_mode = config.get('subtraction_mode', 'detection')
-    subtraction_method = config.get('subtraction_method', 'hotpants')
+    subtraction_mode = config.get('subtraction_mode') or 'detection'
+    subtraction_method = config.get('subtraction_method') or 'hotpants'
+
+    # Normalize config: replace None (from optional form fields) with safe defaults
+    config['sn'] = config.get('sn') or 5
+    config['initial_aper'] = config.get('initial_aper') or 3
+    config['initial_r0'] = config.get('initial_r0') if config.get('initial_r0') is not None else 0
+    config['rel_aper'] = config.get('rel_aper') or 1
+    config['rel_bg1'] = config.get('rel_bg1') or 5
+    config['rel_bg2'] = config.get('rel_bg2') or 7
+    config['spatial_order'] = config.get('spatial_order') if config.get('spatial_order') is not None else 2
+    config['minarea'] = config.get('minarea') or 5
+    config['hotpants_extra'] = config.get('hotpants_extra') or {'ko':0, 'bgo':0}
+    config['sub_size'] = config.get('sub_size') or 1000
+    config['sub_overlap'] = config.get('sub_overlap') if config.get('sub_overlap') is not None else 50
 
     # Cleanup stale plots and files
     cleanup_paths(cleanup_subtraction, basepath=basepath)
