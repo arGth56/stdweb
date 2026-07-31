@@ -1,4 +1,5 @@
 from django import forms
+from django.contrib.auth.forms import UserCreationForm
 
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Field, Fieldset, Div, Row, Column, Submit, HTML
@@ -390,3 +391,17 @@ class SkyPortalUploadForm(forms.Form):
 
         if instruments is not None:
             self.fields['instrument'].choices = instruments
+
+
+class RegisterForm(UserCreationForm):
+    email = forms.EmailField(required=False, label="Email (optional)")
+
+    class Meta(UserCreationForm.Meta):
+        fields = UserCreationForm.Meta.fields + ("email",)
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        user.email = self.cleaned_data.get("email", "")
+        if commit:
+            user.save()
+        return user

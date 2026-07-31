@@ -337,6 +337,7 @@ def handle_uploaded_file(upload, filename):
             dest.write(chunk)
 
 
+@login_required
 def upload_file(request, base=settings.DATA_PATH):
     form = forms.UploadFileForm(request.POST or None, request.FILES or None, filename=request.POST.get('local_file'))
 

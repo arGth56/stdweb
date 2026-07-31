@@ -78,6 +78,8 @@ SECRET_KEY = 'your django secret key goes here'
 
 DEBUG = True
 
+REGISTRATION_OPEN = True
+
 DATA_PATH = /opt/stdweb/data/
 TASKS_PATH = /opt/stdweb/tasks/
 

@@ -1,0 +1,22 @@
+[Unit]
+Description=STDWeb Gunicorn
+After=network.target redis-server.service
+Wants=redis-server.service
+
+[Service]
+Type=simple
+User=pyl
+Group=pyl
+WorkingDirectory=/var/www/stdweb
+Environment=PATH=/var/www/stdweb/.venv/bin:/usr/local/bin:/usr/bin
+ExecStart=/var/www/stdweb/.venv/bin/gunicorn stdweb.wsgi:application \
+    --bind 127.0.0.1:8000 \
+    --workers 3 \
+    --timeout 300 \
+    --access-logfile /var/log/stdweb/gunicorn-access.log \
+    --error-logfile /var/log/stdweb/gunicorn-error.log
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

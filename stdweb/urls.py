@@ -68,6 +68,7 @@ urlpatterns = [
 
     # Auth
     path('login/', auth_views.LoginView.as_view(), name='login'),
+    path('register/', views_user.register, name='register'),
     path('logout/', auth_views.LogoutView.as_view(), name='logout'),
     path('password/', auth_views.PasswordChangeView.as_view(success_url=reverse_lazy('password_change_done')), name='password'),
     path('password/done/', auth_views.PasswordChangeDoneView.as_view(), name='password_change_done'),

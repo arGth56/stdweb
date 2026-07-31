@@ -1,12 +1,33 @@
 import os
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth import login
 from django.contrib import messages
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_protect
 from django.http import HttpResponse, Http404
 from django.conf import settings
 from rest_framework.authtoken.models import Token
+
+from .forms import RegisterForm
+
+
+def register(request):
+    if not settings.REGISTRATION_OPEN:
+        messages.warning(request, "Account registration is not open.")
+        return redirect("login")
+    if request.user.is_authenticated:
+        return redirect("index")
+    if request.method == "POST":
+        form = RegisterForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            login(request, user)
+            messages.success(request, "Account created. You are now logged in.")
+            return redirect("index")
+    else:
+        form = RegisterForm()
+    return render(request, "registration/register.html", {"form": form})
 
 
 @login_required

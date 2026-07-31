@@ -120,6 +120,11 @@
                 </ul>
               </li>
             {% else %}
+              {% if settings.REGISTRATION_OPEN %}
+                <li class="nav-item">
+                  <a class="nav-link" href="{% url 'register' %}?next={{ request.get_full_path }}">Sign up</a>
+                </li>
+              {% endif %}
               <li class="nav-item">
                 <a class="nav-link" href="{% url 'login' %}?next={{ request.get_full_path }}">Log in</a>
               </li>
