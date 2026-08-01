@@ -35,20 +35,20 @@ def _page_meta(request):
     default_desc = getattr(settings, 'SEO_DEFAULT_DESCRIPTION', '')
     pages = {
         'login': (
-            f'Login — {site}',
+            f'Log in — {site} (free science-grade photometry)',
             default_desc,
         ),
         'register': (
-            f'Create account — {site}',
-            'Create a free STDWeb account for FITS upload, automated photometry, and transient detection '
-            '(Gaia calibration, STDPipe). RAPAS-compatible G/BP/RP workflow.',
+            f'Free account — {site}',
+            'Create a free STDWeb account: science-grade Gaia-calibrated photometry, astrometry, '
+            'subtraction, and transient detection on the web — no install, powered by STDPipe.',
         ),
         'upload': (
-            f'{site} — FITS photometry & transient pipeline',
+            f'{site} — free science-grade photometry on the web',
             default_desc,
         ),
         'index': (
-            f'{site} — FITS photometry & transient pipeline',
+            f'{site} — free science-grade photometry on the web',
             default_desc,
         ),
         'password_reset': (
@@ -101,6 +101,7 @@ def robots_txt(_request):
         'Allow: /register/',
         'Allow: /upload/',
         'Allow: /password/reset/',
+        'Allow: /$',
     ]
     if base:
         lines.append(f'Sitemap: {base}/sitemap.xml')
@@ -115,10 +116,8 @@ def sitemap_xml(_request):
     if not base:
         return HttpResponse('', status=404)
 
-    url_names = ['login', 'register', 'upload', 'password_reset']
-    if getattr(settings, 'REGISTRATION_OPEN', False):
-        pass
-    else:
+    url_names = ['index', 'login', 'register', 'upload', 'password_reset']
+    if not getattr(settings, 'REGISTRATION_OPEN', False):
         url_names = [n for n in url_names if n != 'register']
 
     urlset = Element('urlset', xmlns='http://www.sitemaps.org/schemas/sitemap/0.9')
@@ -127,7 +126,12 @@ def sitemap_xml(_request):
         url_el = SubElement(urlset, 'url')
         SubElement(url_el, 'loc').text = loc
         SubElement(url_el, 'changefreq').text = 'monthly'
-        SubElement(url_el, 'priority').text = '0.8' if name == 'upload' else '0.6'
+        if name in ('index', 'upload'):
+            SubElement(url_el, 'priority').text = '1.0'
+        elif name == 'login':
+            SubElement(url_el, 'priority').text = '0.9'
+        else:
+            SubElement(url_el, 'priority').text = '0.6'
 
     body = tostring(urlset, encoding='unicode', default_namespace='')
     xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + body

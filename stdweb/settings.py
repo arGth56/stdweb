@@ -185,15 +185,16 @@ SEO_SITE_NAME = config('SEO_SITE_NAME', default='STDWeb')
 SEO_DEFAULT_DESCRIPTION = config(
     'SEO_DEFAULT_DESCRIPTION',
     default=(
-        'STDWeb: upload astronomical FITS images for automated astrometry, Gaia-calibrated '
-        'photometry (G/BP/RP), and transient detection. Used by Observatoire de Bretagne Sud (RAPAS).'
+        'Free web pipeline for science-grade astronomical photometry: upload FITS, get Gaia-calibrated '
+        'G/BP/RP magnitudes, astrometry, template subtraction, and transient detection — STDPipe on the web.'
     ),
 )
 SEO_KEYWORDS = config(
     'SEO_KEYWORDS',
     default=(
-        'STDWeb, photometry, FITS, transient, astrometry, Gaia, RAPAS, amateur astronomy, '
-        'ObsBS, Bretagne Sud, supernova, GRB follow-up'
+        'science-grade photometry, free astronomical software, STDWeb, FITS photometry, Gaia calibration, '
+        'transient detection, astrometry, STDPipe, web photometry, RAPAS, supernova, GRB follow-up, '
+        'difference imaging, amateur-professional astronomy'
     ),
 )
 SEO_OG_IMAGE = config('SEO_OG_IMAGE', default='')
