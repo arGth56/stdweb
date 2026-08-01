@@ -1,11 +1,10 @@
 {% load filters %}
 {% load tags %}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{% if seo_enabled %}{{ seo_html_lang }}{% else %}en{% endif %}">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="">
     <meta name="author" content="">
 
     <!-- Bootstrap5 -->
@@ -27,6 +26,12 @@
 
     {% load static %}
 
+    {% if settings.HOSTING_SITE_URL %}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;600&family=Plus+Jakarta+Sans:wght@600;700&display=swap" rel="stylesheet">
+    {% endif %}
+
     <!-- Custom CSS and JS -->
     <link rel="stylesheet" href="{% static 'main.css' %}">
     <link rel="stylesheet" href="{% static 'dark.css' %}">
@@ -36,14 +41,17 @@
     <!-- Select2 Bootstrap5 theme - version from https://github.com/drakej/select2-bootstrap-5-theme -->
     <link rel="stylesheet" href="{% static 'select2-bootstrap-5-theme.min.css' %}" />
     <link rel="stylesheet" href="{% static 'select2-bootstrap-5-theme-fix.css' %}" />
+    {% if settings.HOSTING_SITE_URL %}
+    <link rel="stylesheet" href="{% static 'obsbs-host-band.css' %}">
+    {% endif %}
 
     <!-- Our own -->
 
     {% block head %}{% endblock %}
 
     <meta http-equiv="Content-Type" content="application/xhtml+xml; charset=utf-8" />
-    <meta name="robots" content="index, follow" />
-    <title>{% block ptitle %}STDWeb{% endblock %}</title>
+    {% include "includes/acquisition_seo_head.html" %}
+    <title>{% block ptitle %}{% if seo_enabled %}{{ seo_page_title }}{% else %}STDWeb{% endif %}{% endblock %}</title>
 
     <!-- Add custom CSS here -->
     <style>
@@ -51,7 +59,7 @@
 
   </head>
 
-  <body>
+  <body class="d-flex flex-column min-vh-100">
 
     <!-- Navigation bar -->
     <nav class="navbar bg-body-tertiary navbar-expand-lg mb-4 py-1 shadow-sm">
@@ -136,7 +144,7 @@
     </nav>
 
     <!-- Main content -->
-    <div class="container">
+    <main class="container flex-grow-1 pb-3">
 
       {% if messages %}
           {% for message in messages %}
@@ -153,7 +161,25 @@
 
       {% block content %}{% endblock %}
 
-    </div>
-    <!-- /.container -->
+    </main>
+
+    {% if settings.HOSTING_SITE_URL %}
+    <footer class="obsbs-host-band mt-auto" role="contentinfo">
+      <div class="obsbs-host-band-inner d-flex flex-wrap align-items-center justify-content-between gap-3">
+        <div class="obsbs-host-band-text d-flex flex-wrap align-items-center gap-2 gap-md-3">
+          <span class="obsbs-host-badge">Hosted by</span>
+          <a class="obsbs-host-band-name" href="{{ settings.HOSTING_SITE_URL }}" target="_blank" rel="noopener noreferrer">
+            {{ settings.HOSTING_SITE_NAME|default:"Observatoire de Bretagne Sud" }}
+          </a>
+          {% if settings.HOSTING_TAGLINE %}
+            <span class="obsbs-host-band-tagline d-none d-md-inline">{{ settings.HOSTING_TAGLINE }}</span>
+          {% endif %}
+        </div>
+        <a class="obsbs-host-band-link" href="{{ settings.HOSTING_SITE_URL }}" target="_blank" rel="noopener noreferrer">
+          Visit observatory site ↗
+        </a>
+      </div>
+    </footer>
+    {% endif %}
   </body>
 </html>

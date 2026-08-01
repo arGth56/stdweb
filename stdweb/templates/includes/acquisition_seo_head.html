@@ -1,0 +1,43 @@
+{% if seo_enabled %}
+    <meta name="description" content="{% block meta_description %}{% firstof meta_description seo_page_description %}{% endblock %}">
+    {% if seo_keywords %}<meta name="keywords" content="{{ seo_keywords }}">{% endif %}
+    <meta name="robots" content="{% block meta_robots %}{{ seo_robots }}{% endblock %}">
+    <link rel="canonical" href="{% block canonical_url %}{{ seo_canonical }}{% endblock %}">
+
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="{{ seo_site_name }}">
+    <meta property="og:title" content="{% block og_title %}{% firstof og_title seo_page_title %}{% endblock %}">
+    <meta property="og:description" content="{% block og_description %}{% firstof meta_description seo_page_description %}{% endblock %}">
+    <meta property="og:url" content="{{ seo_canonical }}">
+    {% if seo_og_image_abs %}<meta property="og:image" content="{{ seo_og_image_abs }}">{% endif %}
+
+    <meta name="twitter:card" content="{% if seo_og_image_abs %}summary_large_image{% else %}summary{% endif %}">
+    <meta name="twitter:title" content="{% firstof og_title seo_page_title %}">
+    <meta name="twitter:description" content="{% firstof meta_description seo_page_description %}">
+
+    {% if seo_organization_name and seo_organization_url %}
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebApplication",
+          "name": "{{ seo_site_name|escapejs }}",
+          "url": "{{ seo_canonical|escapejs }}",
+          "applicationCategory": "ScientificApplication",
+          "operatingSystem": "Web",
+          "description": "{{ seo_page_description|escapejs }}",
+          "provider": {
+            "@type": "Organization",
+            "name": "{{ seo_organization_name|escapejs }}",
+            "url": "{{ seo_organization_url|escapejs }}"
+          }
+        }
+      ]
+    }
+    </script>
+    {% endif %}
+{% else %}
+    <meta name="description" content="">
+    <meta name="robots" content="index, follow">
+{% endif %}

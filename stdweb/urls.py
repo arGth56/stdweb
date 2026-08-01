@@ -27,6 +27,8 @@ from . import views_tasks
 from . import views_celery
 from . import views_skyportal
 from . import views_user
+from . import forms
+from . import acquisition_seo
 
 urlpatterns = [
     # path('', views.index, name='index'),
@@ -67,19 +69,52 @@ urlpatterns = [
     path('queue/<slug:id>/state', views_celery.get_queue, name='queue_state'),
 
     # Auth
-    path('login/', auth_views.LoginView.as_view(), name='login'),
+    path('login/', auth_views.LoginView.as_view(authentication_form=forms.EmailAuthenticationForm), name='login'),
     path('register/', views_user.register, name='register'),
     path('logout/', auth_views.LogoutView.as_view(), name='logout'),
     path('password/', auth_views.PasswordChangeView.as_view(success_url=reverse_lazy('password_change_done')), name='password'),
     path('password/done/', auth_views.PasswordChangeDoneView.as_view(), name='password_change_done'),
+    path(
+        'password/reset/',
+        auth_views.PasswordResetView.as_view(
+            template_name='registration/password_reset_form.html',
+            email_template_name='registration/password_reset_email.txt',
+            subject_template_name='registration/password_reset_subject.txt',
+            success_url=reverse_lazy('password_reset_done'),
+        ),
+        name='password_reset',
+    ),
+    path(
+        'password/reset/done/',
+        auth_views.PasswordResetDoneView.as_view(
+            template_name='registration/password_reset_done.html',
+        ),
+        name='password_reset_done',
+    ),
+    path(
+        'password/reset/<uidb64>/<token>/',
+        auth_views.PasswordResetConfirmView.as_view(
+            template_name='registration/password_reset_confirm.html',
+            success_url=reverse_lazy('password_reset_complete'),
+        ),
+        name='password_reset_confirm',
+    ),
+    path(
+        'password/reset/complete/',
+        auth_views.PasswordResetCompleteView.as_view(
+            template_name='registration/password_reset_complete.html',
+        ),
+        name='password_reset_complete',
+    ),
 
     # User management
     path('api-tokens/', views_user.api_tokens, name='api_tokens'),
     path('api-tokens/regenerate/', views_user.regenerate_api_token, name='regenerate_api_token'),
     path('api-documentation/', views_user.api_documentation, name='api_documentation'),
 
-    # robots.txt
-    path('robots.txt', lambda _: HttpResponse("User-agent: *\nDisallow: /\n", content_type="text/plain")),
+    # robots.txt / sitemap (acquisition SEO when enabled)
+    path('robots.txt', acquisition_seo.robots_txt),
+    path('sitemap.xml', acquisition_seo.sitemap_xml),
 
     # Admin panel
     path('admin/', admin.site.urls),

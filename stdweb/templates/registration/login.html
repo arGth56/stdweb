@@ -1,6 +1,7 @@
 {% extends "template.html" %}
 
-{% block ptitle %}Login : STDWeb{% endblock %}
+{% block ptitle %}Login — STDWeb{% endblock %}
+{% block meta_description %}Sign in to STDWeb: FITS upload, STDPipe photometry, Gaia calibration, and transient detection for RAPAS and pro-am follow-up.{% endblock %}
 
 {% block title %}{% endblock %}
 
@@ -12,18 +13,21 @@
 
       {% if form.errors %}
         <div class="alert alert-danger" role="alert">
-          Can't log you in with username and/or password entered. Please try again.
+          Can't log you in with the email and/or password entered. Please try again.
         </div>
       {% endif %}
 
       <form method="post" action="{% url 'login' %}" role="form" class="form">
         {% csrf_token %}
         <div class="form-group mb-3">
-          <input type="text" name="{{ form.username.name }}" class="form-control" id="username" placeholder="Username" required autofocus>
+          <input type="email" name="{{ form.username.name }}" class="form-control" id="email" placeholder="Email" required autofocus autocomplete="email">
         </div>
         <div class="form-group mb-3">
           <input type="password" name="{{ form.password.name }}" class="form-control" id="password" placeholder="Password" required>
         </div>
+        <p class="small mb-3">
+          <a href="{% url 'password_reset' %}">Forgot your password?</a>
+        </p>
         <div class="form-group d-grid">
           <button type="submit" class="btn btn-primary">Log in</button>
         </div>
