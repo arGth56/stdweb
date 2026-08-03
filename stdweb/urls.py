@@ -28,7 +28,6 @@ from . import views_celery
 from . import views_skyportal
 from . import views_user
 from . import forms
-from . import acquisition_seo
 
 urlpatterns = [
     # path('', views.index, name='index'),
@@ -112,9 +111,8 @@ urlpatterns = [
     path('api-tokens/regenerate/', views_user.regenerate_api_token, name='regenerate_api_token'),
     path('api-documentation/', views_user.api_documentation, name='api_documentation'),
 
-    # robots.txt / sitemap (acquisition SEO when enabled)
-    path('robots.txt', acquisition_seo.robots_txt),
-    path('sitemap.xml', acquisition_seo.sitemap_xml),
+    # robots.txt
+    path('robots.txt', lambda _: HttpResponse("User-agent: *\nDisallow: /\n", content_type="text/plain")),
 
     # Admin panel
     path('admin/', admin.site.urls),

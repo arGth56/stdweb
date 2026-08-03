@@ -1,5 +1,5 @@
 from django import forms
-from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Field, Fieldset, Div, Row, Column, Submit, HTML
@@ -391,6 +391,19 @@ class SkyPortalUploadForm(forms.Form):
 
         if instruments is not None:
             self.fields['instrument'].choices = instruments
+
+
+class EmailAuthenticationForm(AuthenticationForm):
+    username = forms.CharField(
+        label="Email or username",
+        widget=forms.TextInput(
+            attrs={
+                "autocomplete": "username",
+                "placeholder": "Email or username",
+                "class": "form-control",
+            }
+        ),
+    )
 
 
 class RegisterForm(UserCreationForm):
