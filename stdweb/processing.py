@@ -788,6 +788,7 @@ def inspect_image(filename, config, verbose=True, show=False):
     config['spatial_order'] = config.get('spatial_order') if config.get('spatial_order') is not None else 2
     config['minarea'] = config.get('minarea') or 5
     config['use_color'] = config.get('use_color') if config.get('use_color') is not None else True
+    config['blend_radius'] = config.get('blend_radius') if config.get('blend_radius') is not None else 2.0
     config['refine_wcs'] = config.get('refine_wcs') if config.get('refine_wcs') is not None else True
     config['blind_match_wcs'] = config.get('blind_match_wcs') if config.get('blind_match_wcs') is not None else False
     config['hotpants_extra'] = config.get('hotpants_extra') or {'ko':0, 'bgo':0}
@@ -1519,6 +1520,7 @@ def photometry_image(filename, config, verbose=True, show=False):
     config['spatial_order'] = config.get('spatial_order') if config.get('spatial_order') is not None else 2
     config['minarea'] = config.get('minarea') or 5
     config['use_color'] = config.get('use_color') if config.get('use_color') is not None else True
+    config['blend_radius'] = config.get('blend_radius') if config.get('blend_radius') is not None else 2.0
     config['refine_wcs'] = config.get('refine_wcs') if config.get('refine_wcs') is not None else True
     config['blind_match_wcs'] = config.get('blind_match_wcs') if config.get('blind_match_wcs') is not None else False
     config['hotpants_extra'] = config.get('hotpants_extra') or {'ko':0, 'bgo':0}
@@ -1893,8 +1895,9 @@ def photometry_image(filename, config, verbose=True, show=False):
 
     if config.get('filter_blends', True):
         # TODO: merge blended stars, not remove them!
-        cat_filtered = filter_catalogue_blends(cat, 2*fwhm*pixscale)
-        log(f"{len(cat_filtered)} catalogue stars after blend filtering with {3600*fwhm*pixscale:.1f} arcsec radius")
+        blend_radius = config.get('blend_radius', 2.0)
+        cat_filtered = filter_catalogue_blends(cat, blend_radius*fwhm*pixscale)
+        log(f"{len(cat_filtered)} catalogue stars after blend filtering with {blend_radius*3600*fwhm*pixscale:.1f} arcsec radius")
         # cat.write(os.path.join(basepath, 'cat_filtered.vot'), format='votable', overwrite=True)
         # log("Filtered catalogue written to file:cat_filtered.vot")
     else:

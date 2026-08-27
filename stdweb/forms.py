@@ -162,6 +162,7 @@ class TaskPhotometryForm(forms.Form):
     spatial_order = forms.IntegerField(min_value=0, required=False, label="Zeropoint spatial order")
     use_color = forms.BooleanField(required=False, label="Use color term")
     sr_override = forms.FloatField(min_value=0, required=False, label="Matching radius, arcsec")
+    blend_radius = forms.FloatField(min_value=0, initial=2.0, required=False, label="Blend radius, FWHM")
 
     prefilter_detections = forms.BooleanField(initial=True, required=False, label="Pre-filter detections")
     filter_blends = forms.BooleanField(initial=True, required=False, label="Filter catalogue blends")
@@ -199,6 +200,7 @@ class TaskPhotometryForm(forms.Form):
                 Column('rel_bg2'),
                 Column('fwhm_override'),
                 Column('sr_override'),
+                Column('blend_radius'),
                 css_class='align-items-end'
             ),
             Row(
