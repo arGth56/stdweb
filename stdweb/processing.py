@@ -775,6 +775,7 @@ def inspect_image(filename, config, verbose=True, show=False):
     config['spatial_order'] = config.get('spatial_order', 2)
     config['minarea'] = config.get('minarea', 5)
     config['use_color'] = config.get('use_color', True)
+    config['blend_radius'] = config.get('blend_radius', 2.0)
     config['refine_wcs'] = config.get('refine_wcs', True)
     config['blind_match_wcs'] = config.get('blind_match_wcs', False)
     config['hotpants_extra'] = config.get('hotpants_extra', {'ko':0, 'bgo':0})
@@ -1390,8 +1391,9 @@ def photometry_image(filename, config, verbose=True, show=False):
 
     if config.get('filter_blends', True):
         # TODO: merge blended stars, not remove them!
-        cat_filtered = filter_catalogue_blends(cat, 2*fwhm*pixscale)
-        log(f"{len(cat_filtered)} catalogue stars after blend filtering with {3600*fwhm*pixscale:.1f} arcsec radius")
+        blend_radius = config.get('blend_radius', 2.0)
+        cat_filtered = filter_catalogue_blends(cat, blend_radius*fwhm*pixscale)
+        log(f"{len(cat_filtered)} catalogue stars after blend filtering with {blend_radius*3600*fwhm*pixscale:.1f} arcsec radius")
         # cat.write(os.path.join(basepath, 'cat_filtered.vot'), format='votable', overwrite=True)
         # log("Filtered catalogue written to file:cat_filtered.vot")
     else:
