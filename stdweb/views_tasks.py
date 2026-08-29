@@ -53,33 +53,17 @@ def tasks(request, id=None):
 
         if request.method == 'POST':
             action = request.POST.get('action')
-            if action in ('publish_telegram', 'unpublish_telegram'):
+            if action == 'publish_telegram':
+                return HttpResponseRedirect(reverse('telegram_compose', kwargs={'id': id}))
+            if action == 'unpublish_telegram':
                 if not (request.user.is_authenticated and (request.user.is_staff or request.user == task.user)):
-                    messages.error(request, 'Only the observer can publish this photometry.')
+                    messages.error(request, 'Only the observer can unpublish this photometry.')
                     return HttpResponseRedirect(request.path_info)
-                published = action == 'publish_telegram'
-                n, point = lightcurve.set_published_for_task(task, published)
+                n, point = lightcurve.set_published_for_task(task, False)
                 if not n or point is None:
-                    messages.error(
-                        request,
-                        'No target photometry to publish. Finish photometry (or subtraction) first.',
-                    )
+                    messages.error(request, 'No telegram to remove for this task.')
                     return HttpResponseRedirect(request.path_info)
-                name = point.target_name or f'{point.ra:.5f} {point.dec:.5f}'
-                telegram_url = reverse(
-                    'telegram_object',
-                    kwargs={'ra': f'{point.ra:.5f}', 'dec': f'{point.dec:.5f}'},
-                )
-                if published:
-                    messages.success(
-                        request,
-                        f'Published {n} measurement{"s" if n != 1 else ""} of {name} to Telegram.',
-                    )
-                    return HttpResponseRedirect(telegram_url)
-                messages.success(
-                    request,
-                    f'Removed {n} measurement{"s" if n != 1 else ""} of {name} from Telegram.',
-                )
+                messages.success(request, 'Removed this measurement from Telegram.')
                 return HttpResponseRedirect(request.path_info)
 
         all_forms = {}
@@ -245,27 +229,19 @@ def tasks(request, id=None):
 
         ra = task.config.get('target_ra')
         dec = task.config.get('target_dec')
-        context['lightcurve_url'] = None
         context['telegram_url'] = None
         context['telegram_published'] = False
         context['can_publish_telegram'] = False
-        if ra is not None and dec is not None:
-            try:
-                ra_s, dec_s = f'{float(ra):.5f}', f'{float(dec):.5f}'
-                context['lightcurve_url'] = reverse(
-                    'lightcurve_target', kwargs={'ra': ra_s, 'dec': dec_s},
-                )
-                context['telegram_url'] = reverse(
-                    'telegram_object', kwargs={'ra': ra_s, 'dec': dec_s},
-                )
-            except (TypeError, ValueError):
-                pass
         point = models.LightcurvePoint.objects.filter(task=task).first()
         has_phot = point is not None or (
             'target.vot' in context['files'] or 'sub_target.vot' in context['files']
         )
+        notice = None
         if point is not None:
-            context['telegram_published'] = bool(point.published)
+            notice = models.TelegramNotice.objects.filter(point=point).first()
+            context['telegram_published'] = notice is not None
+            if notice:
+                context['telegram_url'] = reverse('telegram_detail', kwargs={'pk': notice.id})
         if has_phot:
             context['can_publish_telegram'] = bool(context['user_may_submit'] and not task.celery_id)
 

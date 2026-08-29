@@ -138,10 +138,7 @@ def upsert_from_task(task):
         'is_detection': bool(meas.get('is_detection')),
         'is_diff': bool(meas.get('is_diff')),
     }
-    point, created = models.LightcurvePoint.objects.update_or_create(task=task, defaults=defaults)
-    if created and user_has_published_target(task.user, ra, dec):
-        point.published = True
-        point.save(update_fields=['published'])
+    point, _created = models.LightcurvePoint.objects.update_or_create(task=task, defaults=defaults)
     return point
 
 
@@ -153,24 +150,15 @@ def user_has_published_target(user, ra, dec, radius_arcsec=MATCH_ARCSEC):
 
 
 def set_published_for_task(task, published):
-    """Publish or unpublish this user's photometry of this target (not other targets)."""
+    """Publish or unpublish only this task's measurement."""
     point = upsert_from_task(task)
     if point is None:
         return 0, None
-    n = 0
-    alert = (task.config or {}).get('tns_alert') or {}
-    tns_name = (alert.get('tns_name') or '') if alert.get('matched') else ''
-    for other in models.LightcurvePoint.objects.filter(user=task.user):
-        if sep_arcsec(point.ra, point.dec, other.ra, other.dec) <= MATCH_ARCSEC:
-            changed = other.published != published
-            other.published = published
-            if tns_name and other.target_name != tns_name:
-                other.target_name = tns_name[:250]
-                changed = True
-            if changed:
-                other.save()
-            n += 1
-    return n, point
+    point.published = bool(published)
+    point.save(update_fields=['published', 'modified'])
+    if not published:
+        models.TelegramNotice.objects.filter(point=point).delete()
+    return 1, point
 
 
 def cluster_targets(points, radius_arcsec=MATCH_ARCSEC):

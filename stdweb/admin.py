@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django import forms
 
-from .models import Task, Preset, UserProfile, LightcurvePoint, AlertMeta
+from .models import Task, Preset, UserProfile, LightcurvePoint, AlertMeta, TelegramNotice
 
 from .forms import PrettyJSONEncoder
 
@@ -52,3 +52,9 @@ class LightcurvePointAdmin(admin.ModelAdmin):
     list_display = ['id', 'task', 'user', 'filt', 'mjd', 'mag', 'is_detection', 'published']
     list_filter = ['filt', 'is_detection', 'is_diff', 'published']
     search_fields = ['target_name', 'user__username']
+
+
+@admin.register(TelegramNotice)
+class TelegramNoticeAdmin(admin.ModelAdmin):
+    list_display = ['id', 'object_name', 'user', 'created']
+    search_fields = ['object_name', 'title', 'user__username']

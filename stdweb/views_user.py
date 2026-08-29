@@ -38,12 +38,22 @@ def account(request):
         form = AccountShareForm(request.POST)
         if form.is_valid():
             profile.affiliation = (form.cleaned_data.get('affiliation') or '').strip()
-            profile.save(update_fields=['affiliation'])
+            radius = form.cleaned_data.get('telegram_radius_arcmin')
+            age = form.cleaned_data.get('telegram_alert_age_hours')
+            if radius is not None:
+                profile.telegram_radius_arcmin = float(radius)
+            if age is not None:
+                profile.telegram_alert_age_hours = float(age)
+            profile.save(update_fields=[
+                'affiliation', 'telegram_radius_arcmin', 'telegram_alert_age_hours',
+            ])
             messages.success(request, 'Account saved.')
             return redirect('account')
     else:
         form = AccountShareForm(initial={
             'affiliation': profile.affiliation,
+            'telegram_radius_arcmin': profile.telegram_radius_arcmin,
+            'telegram_alert_age_hours': profile.telegram_alert_age_hours,
         })
     return render(request, 'account.html', {
         'form': form,

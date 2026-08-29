@@ -1,5 +1,8 @@
-"""Telegram notices: one text, one measure, one task link, one alert link."""
+"""Telegram notices: one text, one measure, one task link, one cutout."""
 from __future__ import annotations
+
+import io
+import os
 
 from django.conf import settings
 from django.urls import reverse
@@ -74,10 +77,22 @@ def resolve_alert(task, point, user=None):
             except Exception:
                 pass
 
-    if ep.get('matched') and ep.get('trigger'):
+    tns_ok = bool(tns.get('matched') and tns.get('tns_name') and tns.get('on_target', True))
+    ep_ok = bool(ep.get('matched') and ep.get('trigger'))
+
+    if tns_ok:
+        return {
+            'object_name': tns['tns_name'][:120],
+            'alert_url': tns.get('tns_url') or '',
+            'alert_kind': 'tns',
+            'alert_label': tns.get('obj_type') or tns['tns_name'],
+            'discovery_iso': tns.get('discovery_iso') or '',
+            'ep': ep if ep_ok else None,
+            'tns': tns,
+        }
+
+    if ep_ok:
         obj = f"EP-WXT {ep['trigger']}"
-        if ep.get('best_name') and ep.get('on_target'):
-            obj = f"{obj} / {ep['best_name']}"
         return {
             'object_name': obj[:120],
             'alert_url': ep.get('url') or '',
@@ -86,17 +101,6 @@ def resolve_alert(task, point, user=None):
             'discovery_iso': '',
             'ep': ep,
             'tns': tns if tns.get('matched') else None,
-        }
-
-    if tns.get('matched') and tns.get('tns_name'):
-        return {
-            'object_name': tns['tns_name'][:120],
-            'alert_url': tns.get('tns_url') or '',
-            'alert_kind': 'tns',
-            'alert_label': tns.get('obj_type') or tns['tns_name'],
-            'discovery_iso': tns.get('discovery_iso') or '',
-            'ep': None,
-            'tns': tns,
         }
 
     # Last resort: a name that already looks like an alert, never decimal coords.
@@ -135,33 +139,164 @@ def age_string(point, alert, window_hours=24):
     return f'{sign}{days:.1f} d'
 
 
+def coord_string(ra, dec):
+    try:
+        from astropy.coordinates import SkyCoord
+        return SkyCoord(float(ra), float(dec), unit='deg').to_string(
+            'hmsdms', precision=1, alwayssign=True,
+        )
+    except Exception:
+        return f'{float(ra):.5f} {float(dec):+.5f}'
+
+
+def draft_title(alert):
+    obj = (alert or {}).get('object_name') or 'target'
+    kind = (alert or {}).get('alert_kind')
+    if kind == 'tns':
+        return f'Optical photometry of {obj}'
+    if kind == 'gcn':
+        return f'Optical photometry of {obj}'
+    return f'STDWeb photometry of {obj}'
+
+
 def draft_body(task, point, user, request, alert):
     obs = observer_line(user)
     mag = mag_string(point)
-    filt = point.filt or ''
-    when = (point.time_iso or '')[:19]
+    filt = point.filt or 'mag'
+    when = (point.time_iso or '')[:19].replace('T', ' ')
     mjd = f'{point.mjd:.5f}'
     obj = alert.get('object_name') or 'the target'
     task_link = task_url(request, task.id)
     alert_url = alert.get('alert_url') or ''
     window_hours = profile_match_params(user)[1]
     age = age_string(point, alert, window_hours)
+    sky = coord_string(point.ra, point.dec)
+    how = 'difference-image photometry' if point.is_diff else 'aperture photometry'
 
     lines = [
-        f'{obs} reports STDWeb photometry of {obj}.',
+        f'{obs} reports {how} of {obj} obtained with STDWeb.',
         '',
-        f'{when} UT   MJD {mjd}   {filt} = {mag}'
-        + ('  (difference image)' if point.is_diff else ''),
+        f'On {when} UT (MJD {mjd}) we measure',
+        f'  {filt} = {mag} mag',
+        f'at {sky} (J2000).',
     ]
     if age:
-        lines.append(f'Age of alert: {age}')
+        lines += ['', f'Age of the alert at this epoch: {age}.']
     lines += [
         '',
-        f'Task: {task_link}',
+        'Photometry, logs and cutout:',
+        task_link,
     ]
     if alert_url:
-        kind = 'TNS' if alert.get('alert_kind') == 'tns' else 'Alert'
+        kind = 'TNS'
         if alert.get('alert_kind') == 'gcn':
             kind = 'GCN'
-        lines.append(f'{kind}: {alert_url}')
+        elif alert.get('alert_kind') and alert.get('alert_kind') != 'tns':
+            kind = 'Alert'
+        lines += ['', f'{kind}: {alert_url}']
     return '\n'.join(lines)
+
+
+def cutout_relpath(task):
+    base = task.path()
+    for name in (
+        'sub_target.cutout',
+        'target.cutout',
+        'targets/target_0000.cutout',
+    ):
+        if os.path.exists(os.path.join(base, name)):
+            return name
+    return None
+
+
+def _mark_radii(task):
+    config = task.config or {}
+    try:
+        fwhm = float(config.get('fwhm') or 0)
+    except (TypeError, ValueError):
+        fwhm = 0.0
+    if fwhm <= 0:
+        return 8.0, None, None
+    try:
+        r1 = fwhm * float(config.get('rel_aper') or 1.0)
+    except (TypeError, ValueError):
+        r1 = fwhm
+    r2 = r3 = None
+    try:
+        if config.get('rel_bg1') is not None:
+            r2 = fwhm * float(config['rel_bg1'])
+        if config.get('rel_bg2') is not None:
+            r3 = fwhm * float(config['rel_bg2'])
+    except (TypeError, ValueError):
+        pass
+    return max(r1, 3.0), r2, r3
+
+
+def render_illustration(task):
+    """PNG of the target cutout with the photometry aperture drawn on the pixels."""
+    rel = cutout_relpath(task)
+    if not rel:
+        return None
+    fullpath = os.path.join(task.path(), rel)
+    try:
+        import numpy as np
+        from matplotlib.figure import Figure
+        from matplotlib.patches import Circle
+        from stdpipe import cutouts
+    except Exception:
+        return None
+
+    try:
+        cutout = cutouts.load_cutout(fullpath)
+    except Exception:
+        return None
+
+    plane = 'diff' if rel.startswith('sub_target') and cutout.get('diff') is not None else 'image'
+    if cutout.get(plane) is None:
+        for name in ('image', 'diff', 'template', 'convolved'):
+            if cutout.get(name) is not None:
+                plane = name
+                break
+        else:
+            return None
+
+    arr = np.asarray(cutout[plane], dtype=float)
+    config = task.config or {}
+    ra, dec = config.get('target_ra'), config.get('target_dec')
+    mark_r, mark_r2, mark_r3 = _mark_radii(task)
+
+    x = y = None
+    if ra is not None and dec is not None and cutout.get('wcs') is not None:
+        try:
+            x, y = cutout['wcs'].all_world2pix(float(ra), float(dec), 0)
+            x, y = float(x), float(y)
+        except Exception:
+            x = y = None
+    if x is None:
+        y, x = arr.shape[0] / 2.0, arr.shape[1] / 2.0
+
+    fig = Figure(facecolor='white', dpi=96, figsize=(5.0, 5.4), tight_layout=True)
+    ax = fig.add_subplot(1, 1, 1)
+    good = np.isfinite(arr)
+    if np.any(good):
+        vmin, vmax = np.percentile(arr[good], [0.5, 99.5])
+    else:
+        vmin, vmax = 0, 1
+    ax.imshow(arr, cmap='Blues_r', vmin=vmin, vmax=vmax, interpolation='nearest')
+    ax.set_axis_off()
+    color = '#ff3b30'
+    ax.add_artist(Circle((x, y), mark_r, edgecolor=color, facecolor='none', lw=1.8))
+    for radius in (mark_r2, mark_r3):
+        if radius:
+            ax.add_artist(Circle(
+                (x, y), radius, edgecolor=color, facecolor='none', lw=0.9, ls='--',
+            ))
+    s = max(mark_r * 1.7, 10)
+    ax.plot([x - s, x + s], [y, y], color=color, lw=1.2)
+    ax.plot([x, x], [y - s, y + s], color=color, lw=1.2)
+    title = 'Difference' if plane == 'diff' else 'Target'
+    ax.set_title(title, fontsize=11)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png')
+    return buf.getvalue()

@@ -301,6 +301,37 @@
   margin: 0 0 1rem;
 }
 
+.tg-block {
+  margin: 1.3rem 0;
+}
+
+.tg-block h2 {
+  font-size: 0.8rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--lc-muted);
+  margin: 0 0 0.45rem;
+}
+
+.tg-body {
+  white-space: pre-wrap;
+  font: 0.95rem/1.45 ui-monospace, monospace;
+  background: var(--lc-card);
+  border: 1px solid var(--lc-line);
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+  margin: 0;
+}
+
+.tg-cutout {
+  display: block;
+  max-width: min(480px, 100%);
+  background: #fff;
+  border: 1px solid var(--lc-line);
+  border-radius: 8px;
+}
+
 @media (max-width: 800px) {
   .sky-tns {
     grid-template-columns: 1fr;

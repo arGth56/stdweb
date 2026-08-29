@@ -57,6 +57,8 @@ urlpatterns = [
     ),
     path('telegram', views_telegram.telegram_slash),
     path('telegram/', views_telegram.index, name='telegram'),
+    path('telegram/<int:pk>/', views_telegram.detail, name='telegram_detail'),
+    path('telegram/<int:pk>/cutout.png', views_telegram.cutout_png, name='telegram_cutout'),
     re_path(
         r'^telegram/(?P<ra>[-+0-9.]+)/(?P<dec>[-+0-9.]+)/$',
         views_telegram.object_page,
@@ -82,6 +84,12 @@ urlpatterns = [
     # Tasks
     path('tasks/', views_tasks.tasks, {'id':None}, name='tasks'),
     path('tasks/<int:id>', views_tasks.tasks, name='tasks'),
+    path('tasks/<int:id>/telegram/', views_telegram.compose, name='telegram_compose'),
+    path(
+        'tasks/<int:id>/telegram/cutout.png',
+        views_telegram.task_cutout_png,
+        name='telegram_task_cutout',
+    ),
 
     path('tasks/<int:id>/preview/<path:path>', views_tasks.task_preview, name='task_preview'),
     path('tasks/<int:id>/view/<path:path>', views_tasks.task_download, {'attachment': False}, name='task_view'),

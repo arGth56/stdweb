@@ -4,15 +4,14 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% block title %}Lightcurves{% endblock %} — STDWeb</title>
+    <title>{% block title %}Telegram{% endblock %} — STDWeb</title>
     <link rel="stylesheet" href="{% static 'lightcurve.css' %}">
     {% block head %}{% endblock %}
   </head>
   <body class="lc-body">
     <header class="lc-header">
-      <a class="lc-brand" href="{% url 'lightcurve' %}">STDWeb</a>
+      <a class="lc-brand" href="{% url 'telegram' %}">STDWeb</a>
       <nav class="lc-nav">
-        <a href="{% url 'lightcurve' %}">Lightcurves</a>
         <a href="{% url 'telegram' %}">Telegram</a>
         <a href="{% url 'index' %}">STDWeb</a>
         <a href="/batch/">Batch</a>
@@ -37,8 +36,7 @@
     </main>
 
     <footer class="lc-footer">
-      Public measurements only — publish a target from its finished photometry task.
-      Lightcurves plot the same points; Telegram lists them TNS-style.
+      A telegram is one published measurement of an alert, from a finished photometry task.
     </footer>
   </body>
 </html>

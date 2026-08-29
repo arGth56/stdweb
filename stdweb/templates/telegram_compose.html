@@ -1,0 +1,67 @@
+{% extends "template.html" %}
+
+{% block ptitle %}Publish to Telegram : STDWeb{% endblock %}
+{% block title %}Publish to Telegram{% endblock %}
+
+{% block content %}
+  <p class="text-muted mb-2">
+    <a href="{% url 'tasks' task.id %}">← task {{ task.id }}</a>
+  </p>
+  <h2 class="h4 mb-3">{% if existing %}Edit telegram{% else %}Publish this measurement{% endif %}</h2>
+  <p class="text-muted">
+    Only this task’s photometry is published. Edit the ATel-style text, then submit.
+    Affiliation is taken from your <a href="{% url 'account' %}">account</a>.
+  </p>
+
+  <div class="row g-4">
+    <div class="col-lg-7">
+      <form method="post" action="{% url 'telegram_compose' task.id %}">
+        {% csrf_token %}
+        <div class="mb-3">
+          <label class="form-label" for="id_object_name">Object (alert name)</label>
+          <input class="form-control" type="text" name="object_name" id="id_object_name"
+                 value="{{ object_name }}" maxlength="120" required
+                 placeholder="SN 2026fvx  or  EP-WXT 01709274151">
+          <div class="form-text">TNS, EP-WXT or GCN name — not coordinates.</div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="id_title">Title</label>
+          <input class="form-control" type="text" name="title" id="id_title"
+                 value="{{ title }}" maxlength="200">
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="id_body">Text</label>
+          <textarea class="form-control font-monospace" name="body" id="id_body"
+                    rows="16" required>{{ body }}</textarea>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="id_alert_url">Alert link (TNS / GCN)</label>
+          <input class="form-control" type="text" name="alert_url" id="id_alert_url"
+                 value="{{ alert_url }}" maxlength="250" placeholder="https://">
+          <input type="hidden" name="alert_kind" value="{{ alert_kind }}">
+        </div>
+        <p class="small text-muted">
+          Measure: <strong>{{ mag_s }} {{ point.filt }}</strong>
+          · {{ observer }}
+          · <a href="{{ task_url }}">{{ task_url }}</a>
+        </p>
+        <button type="submit" class="btn btn-primary">
+          {% if existing %}Update telegram{% else %}Publish to Telegram{% endif %}
+        </button>
+        <a class="btn btn-outline-secondary" href="{% url 'tasks' task.id %}">Cancel</a>
+      </form>
+    </div>
+    <div class="col-lg-5">
+      <h3 class="h6">Target</h3>
+      {% if has_cutout %}
+        <img src="{{ cutout_url }}" alt="Target cutout with overlay"
+             class="img-fluid border rounded bg-white" style="max-width: 420px;">
+        <p class="form-text mt-2">
+          Target position and photometry aperture are drawn on the cutout.
+        </p>
+      {% else %}
+        <p class="text-muted">No target cutout on this task yet (run photometry).</p>
+      {% endif %}
+    </div>
+  </div>
+{% endblock %}

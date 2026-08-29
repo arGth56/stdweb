@@ -425,7 +425,7 @@
           <div class="small mt-1">
             A telegram is a photometry reply to this alert.
             {% if can_publish_telegram and not telegram_published %}
-              Publish it from the photometry section below.
+              <a href="{% url 'telegram_compose' task.id %}">Publish to Telegram</a> opens an editable draft of this measurement.
             {% endif %}
           </div>
         </div>
@@ -562,37 +562,32 @@
               </svg>
               Good stars only (CSV)
             </a>
-            {% if lightcurve_url %}
-              <a href="{{ lightcurve_url }}"
-                 class="btn btn-outline-secondary btn-sm ms-1"
-                 title="Public lightcurve for this target position">
-                Lightcurve
-              </a>
-            {% endif %}
             {% if telegram_url %}
               <a href="{{ telegram_url }}"
                  class="btn btn-outline-secondary btn-sm ms-1"
-                 title="Telegram page for this target">
+                 title="Public telegram for this measurement">
                 Telegram
               </a>
             {% endif %}
             {% if can_publish_telegram %}
-              <form method="post" action="{% url 'tasks' task.id %}" class="d-inline">
-                {% csrf_token %}
                 {% if telegram_published %}
-                  <input type="hidden" name="action" value="unpublish_telegram">
-                  <button type="submit" class="btn btn-outline-danger btn-sm ms-1"
-                          title="Remove this target from Telegram. Other targets stay as they are.">
-                    Unpublish from Telegram
-                  </button>
+                  <a href="{% url 'telegram_compose' task.id %}"
+                     class="btn btn-outline-secondary btn-sm ms-1">Edit telegram</a>
+                  <form method="post" action="{% url 'tasks' task.id %}" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="unpublish_telegram">
+                    <button type="submit" class="btn btn-outline-danger btn-sm ms-1"
+                            title="Remove this measurement from Telegram.">
+                      Unpublish from Telegram
+                    </button>
+                  </form>
                 {% else %}
-                  <input type="hidden" name="action" value="publish_telegram">
-                  <button type="submit" class="btn btn-primary btn-sm ms-1"
-                          title="Publish this target's photometry as a telegram (follow-up of the TNS alert). Other targets stay private.">
-                    Publish to Telegram{% if tns_alert.matched and tns_alert.on_target %} ({{ tns_alert.tns_name }}){% endif %}
-                  </button>
+                  <a href="{% url 'telegram_compose' task.id %}"
+                     class="btn btn-primary btn-sm ms-1"
+                     title="Compose an ATel-style telegram for this measurement only.">
+                    Publish to Telegram{% if tns_alert.matched and tns_alert.on_target %} ({{ tns_alert.tns_name }}){% elif ep_alert.matched %} (EP-WXT {{ ep_alert.trigger }}){% endif %}
+                  </a>
                 {% endif %}
-              </form>
             {% elif telegram_published %}
               <span class="badge text-bg-success ms-2">On Telegram</span>
             {% endif %}
@@ -605,23 +600,23 @@
             {% if telegram_url %}
               <a href="{{ telegram_url }}"
                  class="btn btn-outline-secondary btn-sm"
-                 title="Telegram page for this target">Telegram</a>
+                 title="Public telegram for this measurement">Telegram</a>
             {% endif %}
             {% if can_publish_telegram %}
-              <form method="post" action="{% url 'tasks' task.id %}" class="d-inline">
-                {% csrf_token %}
                 {% if telegram_published %}
-                  <input type="hidden" name="action" value="unpublish_telegram">
-                  <button type="submit" class="btn btn-outline-danger btn-sm ms-1">
-                    Unpublish from Telegram
-                  </button>
+                  <a href="{% url 'telegram_compose' task.id %}" class="btn btn-outline-secondary btn-sm ms-1">Edit telegram</a>
+                  <form method="post" action="{% url 'tasks' task.id %}" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="unpublish_telegram">
+                    <button type="submit" class="btn btn-outline-danger btn-sm ms-1">
+                      Unpublish from Telegram
+                    </button>
+                  </form>
                 {% else %}
-                  <input type="hidden" name="action" value="publish_telegram">
-                  <button type="submit" class="btn btn-primary btn-sm ms-1">
-                    Publish to Telegram{% if tns_alert.matched and tns_alert.on_target %} ({{ tns_alert.tns_name }}){% endif %}
-                  </button>
+                  <a href="{% url 'telegram_compose' task.id %}" class="btn btn-primary btn-sm ms-1">
+                    Publish to Telegram{% if tns_alert.matched and tns_alert.on_target %} ({{ tns_alert.tns_name }}){% elif ep_alert.matched %} (EP-WXT {{ ep_alert.trigger }}){% endif %}
+                  </a>
                 {% endif %}
-              </form>
             {% endif %}
           </div>
           {% endif %}

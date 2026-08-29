@@ -1,59 +1,47 @@
-{% extends "lightcurve/base.html" %}
+{% extends "template.html" %}
 
+{% block ptitle %}Telegram : STDWeb{% endblock %}
 {% block title %}Telegram{% endblock %}
 
 {% block content %}
-  <h1>Telegram</h1>
-  <p class="lc-lead">
-    Simplified TNS: photometry telegrams published as follow-up of a matching TNS alert.
-    Age is days since that discovery (or the first STDWeb epoch if there is no TNS name).
+  <p class="text-muted">
+    Each telegram is one measurement: editable text, a public task link, and a target cutout.
   </p>
 
-  <form class="lc-search" method="get" action="{% url 'telegram' %}">
-    <input type="search" name="name" value="{{ query }}" placeholder="Object name or observer" aria-label="Search objects">
-    <button type="submit">Search</button>
+  <form class="row g-2 mb-4" method="get" action="{% url 'telegram' %}">
+    <div class="col-md-6">
+      <input class="form-control" type="search" name="name" value="{{ query }}"
+             placeholder="Alert name or observer" aria-label="Search telegrams">
+    </div>
+    <div class="col-auto">
+      <button class="btn btn-primary" type="submit">Search</button>
+    </div>
   </form>
 
   {% if objects %}
-    <div class="tns-wrap">
-      <table class="tns-table">
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
         <thead>
           <tr>
             <th>Object</th>
-            <th>Type</th>
-            <th>RA</th>
-            <th>Dec</th>
-            <th>Discovery</th>
-            <th>Age</th>
-            <th>Last photometry</th>
-            <th>N</th>
-            <th>Reporters</th>
+            <th>Measure</th>
+            <th>UTC</th>
+            <th>Observer</th>
           </tr>
         </thead>
         <tbody>
           {% for o in objects %}
             <tr>
-              <td><a href="{{ o.object_url }}">{{ o.name }}</a></td>
-              <td>{{ o.tns.obj_type|default:"—" }}</td>
-              <td class="num">{{ o.ra_s }}</td>
-              <td class="num">{{ o.dec_s }}</td>
-              <td>
-                {% if o.tns_url %}
-                  <a href="{{ o.tns_url }}" target="_blank" rel="noopener">{{ o.discovery_iso|default:"TNS" }}</a>
-                {% else %}
-                  {{ o.discovery_iso|default:"—" }}
-                {% endif %}
-              </td>
-              <td class="num">{{ o.age_now|default:"—" }}</td>
-              <td>{{ o.last_mag }} <span class="lc-muted">{{ o.last_filt }}</span></td>
-              <td class="num">{{ o.n }}</td>
-              <td>{{ o.observers|join:", " }}</td>
+              <td><a href="{{ o.url }}">{{ o.object_name }}</a></td>
+              <td>{{ o.mag_s }} <span class="text-muted">{{ o.filt }}</span></td>
+              <td class="font-monospace">{{ o.time }}</td>
+              <td>{{ o.observer }}</td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   {% else %}
-    <p class="lc-empty">No public objects yet.</p>
+    <p class="text-muted">No telegrams yet. Publish a measurement from its finished task.</p>
   {% endif %}
 {% endblock %}

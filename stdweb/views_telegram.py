@@ -1,14 +1,16 @@
-"""Simplified TNS: public objects and their raw photometry."""
+"""Public telegrams: one editable notice per published measurement."""
 from __future__ import annotations
 
-from astropy.time import Time
-
-from django.http import HttpResponse, HttpResponsePermanentRedirect
+from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.http import HttpResponse, HttpResponsePermanentRedirect, HttpResponseRedirect
+from django.shortcuts import get_object_or_404
 from django.template.response import TemplateResponse
 from django.urls import reverse
 
-from . import alerts
 from . import lightcurve
+from . import models
+from . import telegram as tg
 
 
 def telegram_slash(request):
@@ -19,165 +21,202 @@ def telegram_slash(request):
     return HttpResponsePermanentRedirect(url)
 
 
-def _format_age(days):
-    if days is None:
-        return ''
-    sign = '+' if days >= 0 else ''
-    if abs(days) < 2:
-        return f'{sign}{days * 24:.1f} h'
-    return f'{sign}{days:.1f} d'
-
-
-def _share_enabled(request):
-    return (
-        request.user.is_authenticated
-        and hasattr(request.user, 'profile')
-        and request.user.profile.share_public_lightcurves
-    )
-
-
-def _mag_string(point):
-    if point.is_detection and point.mag is not None:
-        if point.magerr is not None:
-            return f'{point.mag:.3f} ± {point.magerr:.3f}'
-        return f'{point.mag:.3f}'
-    if point.mag_limit is not None:
-        return f'> {point.mag_limit:.2f}'
-    return '—'
-
-
-def _now_mjd():
-    return float(Time.now().mjd)
-
-
-def _decorate_cluster(cluster):
-    meta = alerts.ensure_alert_meta(
-        cluster['name'],
-        first_mjd=cluster['mjd_min'],
-        first_iso=min((p.time_iso for p in cluster['points']), default=''),
-        ra=cluster['ra'],
-        dec=cluster['dec'],
-    )
-    tns = alerts.tns_payload(meta)
-    discovery_mjd = meta.discovery_mjd if meta else cluster['mjd_min']
-    discovery_iso = (meta.discovery_iso if meta else '') or ''
-    source = (meta.source if meta else 'first_epoch') or 'first_epoch'
-    tns_url = (tns or {}).get('tns_url') or ''
-    name = (tns or {}).get('tns_name') or cluster['name'] or f"{cluster['ra_s']} {cluster['dec_s']}"
-
-    offset = None
-    if tns and tns.get('tns_ra') is not None:
-        offset = lightcurve.sep_arcsec(cluster['ra'], cluster['dec'], tns['tns_ra'], tns['tns_dec'])
-
-    last = max(cluster['points'], key=lambda p: p.mjd)
-    rows = []
-    for point in sorted(cluster['points'], key=lambda p: p.mjd, reverse=True):
-        age = alerts.age_days(point.mjd, discovery_mjd)
-        rows.append({
-            'time': point.time_iso,
-            'mjd': point.mjd,
-            'age': _format_age(age),
-            'filt': point.filt,
-            'mag_s': _mag_string(point),
-            'mag': point.mag,
-            'magerr': point.magerr,
-            'mag_limit': point.mag_limit,
-            'is_detection': point.is_detection,
-            'is_diff': point.is_diff,
-            'observer': lightcurve.observer_label(point.user),
-        })
-
+def _decorate(notice, request):
+    point = notice.point
+    task_id = point.task_id
     return {
-        'name': name,
-        'ra_s': cluster['ra_s'],
-        'dec_s': cluster['dec_s'],
-        'n': cluster['n'],
-        'filters': cluster['filters'],
-        'observers': cluster['observers'],
-        'discovery_iso': discovery_iso[:19] if discovery_iso else '',
-        'source': source,
-        'tns_url': tns_url,
-        'tns': tns,
-        'tns_offset': f'{offset:.2f}″' if offset is not None else '',
-        'sky': {
-            'ra': round(float(cluster['ra']), 6),
-            'dec': round(float(cluster['dec']), 6),
-            'name': name,
-            'tns_ra': (tns or {}).get('tns_ra'),
-            'tns_dec': (tns or {}).get('tns_dec'),
-            'tns_name': (tns or {}).get('tns_name') or '',
-        },
-        'age_now': _format_age(alerts.age_days(_now_mjd(), discovery_mjd)),
-        'last_time': last.time_iso,
-        'last_filt': last.filt,
-        'last_mag': _mag_string(last),
-        'last_observer': lightcurve.observer_label(last.user),
-        'rows': rows,
-        'object_url': reverse('telegram_object', kwargs={
-            'ra': cluster['ra_s'], 'dec': cluster['dec_s'],
-        }),
-        'lc_url': reverse('lightcurve_target', kwargs={
-            'ra': cluster['ra_s'], 'dec': cluster['dec_s'],
-        }),
+        'id': notice.id,
+        'object_name': notice.object_name,
+        'title': notice.title or notice.object_name,
+        'body': notice.body,
+        'alert_url': notice.alert_url,
+        'alert_kind': notice.alert_kind,
+        'alert_label': (
+            'TNS' if notice.alert_kind == 'tns'
+            else 'GCN' if notice.alert_kind == 'gcn'
+            else 'Alert'
+        ),
+        'mag_s': tg.mag_string(point),
+        'filt': point.filt,
+        'time': (point.time_iso or '')[:19],
+        'mjd': point.mjd,
+        'is_diff': point.is_diff,
+        'observer': tg.observer_line(notice.user),
+        'task_id': task_id,
+        'task_url': tg.task_url(request, task_id),
+        'url': reverse('telegram_detail', kwargs={'pk': notice.id}),
+        'cutout_url': reverse('telegram_cutout', kwargs={'pk': notice.id}),
+        'has_cutout': bool(tg.cutout_relpath(point.task)),
+        'created': notice.created,
     }
 
 
 def index(request):
     query = (request.GET.get('name') or request.GET.get('q') or '').strip()
-    clusters = lightcurve.cluster_targets(lightcurve.public_points())
-    objects = [_decorate_cluster(c) for c in clusters]
+    notices = list(
+        models.TelegramNotice.objects.select_related(
+            'point', 'point__task', 'user', 'user__profile',
+        )
+    )
+    objects = [_decorate(n, request) for n in notices]
     if query:
         qlow = query.lower()
         objects = [
             o for o in objects
-            if qlow in (o['name'] or '').lower()
-            or qlow in o['ra_s']
-            or any(qlow in obs.lower() for obs in o['observers'])
-            or qlow in ((o.get('tns') or {}).get('obj_type') or '').lower()
-            or qlow in ((o.get('tns') or {}).get('host_name') or '').lower()
+            if qlow in (o['object_name'] or '').lower()
+            or qlow in (o['observer'] or '').lower()
+            or qlow in (o['body'] or '').lower()
         ]
     return TemplateResponse(request, 'lightcurve/telegram.html', {
         'objects': objects,
         'query': query,
-        'share_enabled': _share_enabled(request),
+    })
+
+
+def detail(request, pk):
+    notice = get_object_or_404(
+        models.TelegramNotice.objects.select_related(
+            'point', 'point__task', 'user', 'user__profile',
+        ),
+        pk=pk,
+    )
+    return TemplateResponse(request, 'lightcurve/telegram_object.html', {
+        'obj': _decorate(notice, request),
+        'notice': notice,
     })
 
 
 def object_page(request, ra, dec):
+    """Old sky-coordinate URL: send to the notice at that position, if any."""
     try:
-        ra_f = float(ra)
-        dec_f = float(dec)
+        ra_f, dec_f = float(ra), float(dec)
     except (TypeError, ValueError):
-        return HttpResponse('Invalid coordinates', status=400)
-    points = lightcurve.points_near(ra_f, dec_f)
-    if not points:
-        clusters = []
+        return HttpResponseRedirect(reverse('telegram'))
+    best, best_sep = None, 8.0
+    for notice in models.TelegramNotice.objects.select_related('point'):
+        sep = lightcurve.sep_arcsec(ra_f, dec_f, notice.point.ra, notice.point.dec)
+        if sep < best_sep:
+            best, best_sep = notice, sep
+    if best is None:
+        return HttpResponseRedirect(reverse('telegram'))
+    return HttpResponsePermanentRedirect(
+        reverse('telegram_detail', kwargs={'pk': best.id}),
+    )
+
+
+def _png_response(data, public=False):
+    if not data:
+        return HttpResponse('not found', status=404)
+    response = HttpResponse(data, content_type='image/png')
+    if public:
+        response['Cache-Control'] = 'public, max-age=300'
     else:
-        clusters = lightcurve.cluster_targets(points)
-    if not clusters:
-        meta = alerts.ensure_alert_meta('', ra=ra_f, dec=dec_f)
-        tns = alerts.tns_payload(meta)
-        offset = None
-        if tns and tns.get('tns_ra') is not None:
-            offset = lightcurve.sep_arcsec(ra_f, dec_f, tns['tns_ra'], tns['tns_dec'])
-        return TemplateResponse(request, 'lightcurve/telegram_object.html', {
-            'obj': None,
-            'ra': ra_f,
-            'dec': dec_f,
-            'tns': tns,
-            'tns_offset': f'{offset:.2f}″' if offset is not None else '',
-            'sky': {
-                'ra': round(float(ra_f), 6),
-                'dec': round(float(dec_f), 6),
-                'name': (tns or {}).get('tns_name') or f'{ra_f:.5f} {dec_f:.5f}',
-                'tns_ra': (tns or {}).get('tns_ra'),
-                'tns_dec': (tns or {}).get('tns_dec'),
-                'tns_name': (tns or {}).get('tns_name') or '',
-            },
-            'share_enabled': _share_enabled(request),
-        })
-    obj = _decorate_cluster(clusters[0])
-    return TemplateResponse(request, 'lightcurve/telegram_object.html', {
-        'obj': obj,
-        'share_enabled': _share_enabled(request),
+        response['Cache-Control'] = 'private, no-store'
+    return response
+
+
+def cutout_png(request, pk):
+    notice = get_object_or_404(
+        models.TelegramNotice.objects.select_related('point__task'),
+        pk=pk,
+    )
+    return _png_response(tg.render_illustration(notice.point.task), public=True)
+
+
+def _may_edit_task(request, task):
+    return request.user.is_authenticated and (
+        request.user.is_staff or request.user == task.user
+    )
+
+
+def _task_cutout_allowed(request, task, point):
+    if point is not None and point.published:
+        return True
+    return _may_edit_task(request, task)
+
+
+def task_cutout_png(request, id):
+    task = get_object_or_404(models.Task, id=id)
+    point = models.LightcurvePoint.objects.filter(task=task).first()
+    if not _task_cutout_allowed(request, task, point):
+        return HttpResponse('not found', status=404)
+    return _png_response(tg.render_illustration(task), public=bool(point and point.published))
+
+
+@login_required
+def compose(request, id):
+    task = get_object_or_404(models.Task, id=id)
+    if not _may_edit_task(request, task):
+        messages.error(request, 'Only the observer can publish this photometry.')
+        return HttpResponseRedirect(reverse('tasks', kwargs={'id': id}))
+    if task.celery_id:
+        messages.warning(request, f'Task {id} is still running.')
+        return HttpResponseRedirect(reverse('tasks', kwargs={'id': id}))
+
+    point = lightcurve.upsert_from_task(task)
+    if point is None:
+        messages.error(
+            request,
+            'No target photometry to publish. Finish photometry (or subtraction) first.',
+        )
+        return HttpResponseRedirect(reverse('tasks', kwargs={'id': id}))
+
+    existing = models.TelegramNotice.objects.filter(point=point).first()
+    alert = tg.resolve_alert(task, point, user=request.user)
+    has_cutout = bool(tg.cutout_relpath(task))
+
+    if request.method == 'POST':
+        object_name = (request.POST.get('object_name') or '').strip()[:120]
+        title = (request.POST.get('title') or '').strip()[:200]
+        body = (request.POST.get('body') or '').strip()
+        alert_url = (request.POST.get('alert_url') or '').strip()[:250]
+        alert_kind = (request.POST.get('alert_kind') or alert.get('alert_kind') or '')[:20]
+        if not body:
+            messages.error(request, 'The telegram text cannot be empty.')
+        elif not object_name:
+            messages.error(request, 'Object must be the alert name (TNS, EP-WXT, GCN, …).')
+        else:
+            if object_name and point.target_name != object_name:
+                point.target_name = object_name[:250]
+            point.published = True
+            point.save()
+            notice, _ = models.TelegramNotice.objects.update_or_create(
+                point=point,
+                defaults={
+                    'user': task.user,
+                    'object_name': object_name,
+                    'alert_url': alert_url,
+                    'alert_kind': alert_kind,
+                    'title': title or object_name,
+                    'body': body,
+                },
+            )
+            messages.success(request, f'Published telegram for {object_name}.')
+            return HttpResponseRedirect(
+                reverse('telegram_detail', kwargs={'pk': notice.id}),
+            )
+    else:
+        object_name = (existing.object_name if existing else '') or alert.get('object_name') or ''
+        title = (existing.title if existing else '') or tg.draft_title(alert)
+        body = (existing.body if existing else '') or tg.draft_body(
+            task, point, task.user, request, alert,
+        )
+        alert_url = (existing.alert_url if existing else '') or alert.get('alert_url') or ''
+        alert_kind = (existing.alert_kind if existing else '') or alert.get('alert_kind') or ''
+
+    return TemplateResponse(request, 'telegram_compose.html', {
+        'task': task,
+        'point': point,
+        'object_name': object_name,
+        'title': title,
+        'body': body,
+        'alert_url': alert_url,
+        'alert_kind': alert_kind,
+        'has_cutout': has_cutout,
+        'cutout_url': reverse('telegram_task_cutout', kwargs={'id': task.id}),
+        'mag_s': tg.mag_string(point),
+        'observer': tg.observer_line(task.user),
+        'task_url': tg.task_url(request, task.id),
+        'existing': existing,
+        'alert': alert,
     })

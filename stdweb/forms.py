@@ -427,5 +427,21 @@ class AccountShareForm(forms.Form):
         required=False,
         max_length=120,
         label='Affiliation',
-        help_text='Observatory or institute. Shown next to your name on public lightcurves and telegrams.',
+        help_text='Observatory or institute. Shown with your name on telegrams.',
+    )
+    telegram_radius_arcmin = forms.FloatField(
+        required=False,
+        min_value=0.01,
+        max_value=60,
+        initial=1.0,
+        label='Telegram match radius',
+        help_text='Arcminutes. Cone used to attach a TNS or EP/GCN alert when you compose a telegram.',
+    )
+    telegram_alert_age_hours = forms.FloatField(
+        required=False,
+        min_value=0.1,
+        max_value=8760,
+        initial=24.0,
+        label='Alert age window',
+        help_text='Hours. Older alerts are noted in the draft; you can still publish.',
     )
