@@ -250,6 +250,9 @@
             Multiple targets may be listed, one per line. The first one will be the primary one, the rest may be used to perform forced photometry at additional positions around it. Every target may be defined by either Simbad or TNS resolvable name, or by a coordinate string in common formats (pair of degrees, or HH MM SS DD MM SS, etc).
           </p>
           <p>
+            Inspection then asks TNS whether an alert sits at that position. A telegram is a photometry follow-up of a matching alert.
+          </p>
+          <p>
             The mask is created from NaN values in the image, pixels above saturation level, and from optional cosmic ray detection. The latter is not always working perfectly, so disable it if it starts masking the actual stars! If the image has unusable regions (e.g. overscans) around it - you may mask them manually using custom mask editor.
           </p>
           <p>
@@ -355,6 +358,105 @@
 
     <!-- Initial inspection -->
     <hr style="border-style: dotted">
+
+    {% if ep_alert and ep_alert.trigger %}
+      {% if ep_alert.matched and ep_alert.on_target %}
+        <div class="alert alert-success py-2" role="status">
+          <strong>EP-WXT trigger {{ ep_alert.trigger }}</strong>
+          matches
+          <strong>{{ ep_alert.best_name }}</strong>
+          {% for c in ep_alert.candidates %}
+            {% if c.on_target %} ({{ c.offset_s }}){% endif %}
+          {% endfor %}
+          {% if ep_alert.subject %}
+            · {{ ep_alert.subject }}
+          {% endif %}
+          <div class="small mt-1">
+            {% if ep_alert.url %}<a href="{{ ep_alert.url }}" target="_blank" rel="noopener">GCN circular</a>{% endif %}
+            {% for circ in ep_alert.circulars %}
+              {% if not forloop.first %} · <a href="{{ circ.url }}" target="_blank" rel="noopener">{{ circ.id }}</a>{% endif %}
+            {% endfor %}
+            {% if ep_alert.other_candidates %}
+              · other FXT candidates:
+              {% for c in ep_alert.other_candidates %}
+                {{ c.name }}{% if c.offset_s %} ({{ c.offset_s }}){% endif %}{% if not forloop.last %}, {% endif %}
+              {% endfor %}
+            {% endif %}
+          </div>
+        </div>
+      {% elif ep_alert.matched %}
+        <div class="alert alert-warning py-2" role="status">
+          <strong>EP-WXT trigger {{ ep_alert.trigger }}</strong>
+          {% if ep_alert.subject %} — {{ ep_alert.subject }}{% endif %}
+          {% if ep_alert.url %}
+            · <a href="{{ ep_alert.url }}" target="_blank" rel="noopener">GCN</a>
+          {% endif %}
+          {% if ep_alert.candidates %}
+            <div class="small mt-1">
+              FXT candidates:
+              {% for c in ep_alert.candidates %}
+                {{ c.name }}{% if c.offset_s %} ({{ c.offset_s }} from the photometry position){% endif %}{% if not forloop.last %}; {% endif %}
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+      {% else %}
+        <div class="alert alert-secondary py-2" role="status">
+          FITS object looks like <strong>EP-WXT trigger {{ ep_alert.trigger }}</strong>,
+          but no GCN circular was found.
+          <a href="https://gcn.nasa.gov/circulars?query={{ ep_alert.trigger }}" target="_blank" rel="noopener">Search GCN</a>
+        </div>
+      {% endif %}
+    {% endif %}
+
+    {% if tns_alert %}
+      {% if tns_alert.matched and tns_alert.on_target %}
+        <div class="alert alert-success py-2" role="status">
+          <strong>TNS alert matches this target.</strong>
+          {% if tns_alert.tns_url %}
+            <a href="{{ tns_alert.tns_url }}" target="_blank" rel="noopener">{{ tns_alert.tns_name }}</a>
+          {% else %}
+            {{ tns_alert.tns_name }}
+          {% endif %}
+          {% if tns_alert.obj_type %} ({{ tns_alert.obj_type }}){% endif %}
+          {% if tns_alert.offset_s %} · {{ tns_alert.offset_s }} from the photometry position{% endif %}
+          {% if tns_alert.discovery_iso %} · discovered {{ tns_alert.discovery_iso }}{% endif %}
+          {% if tns_alert.disc_mag %} · {{ tns_alert.disc_mag }} {{ tns_alert.disc_filter }}{% endif %}
+          <div class="small mt-1">
+            A telegram is a photometry reply to this alert.
+            {% if can_publish_telegram and not telegram_published %}
+              Publish it from the photometry section below.
+            {% endif %}
+          </div>
+        </div>
+      {% elif tns_alert.matched %}
+        <div class="alert alert-warning py-2" role="status">
+          <strong>TNS alert does not match these coordinates.</strong>
+          {% if tns_alert.tns_url %}
+            <a href="{{ tns_alert.tns_url }}" target="_blank" rel="noopener">{{ tns_alert.tns_name }}</a>
+          {% else %}
+            {{ tns_alert.tns_name }}
+          {% endif %}
+          {% if tns_alert.obj_type %} ({{ tns_alert.obj_type }}){% endif %}
+          is {{ tns_alert.offset_s|default:"far" }} from the target.
+          Check the target name or coordinates before publishing a telegram.
+        </div>
+      {% elif task.config.target_ra %}
+        <div class="alert alert-secondary py-2" role="status">
+          {% if tns_alert.query_ok == False %}
+          <strong>TNS query failed</strong>
+          {% if tns_alert.query_error %} ({{ tns_alert.query_error }}){% endif %}
+          — this is not a confirmed empty field.
+          {% else %}
+          <strong>No TNS alert</strong> within {{ tns_alert.radius_arcsec|default:60 }}″ of this target.
+          {% endif %}
+          {% if tns_alert.tns_url %}
+            <a href="{{ tns_alert.tns_url }}" target="_blank" rel="noopener">TNS cone search</a>
+          {% endif %}
+        </div>
+      {% endif %}
+    {% endif %}
+
     <div class="row mb-2">
       {% if 'inspect.log' in files %}
         <div class="col">
@@ -460,7 +562,69 @@
               </svg>
               Good stars only (CSV)
             </a>
+            {% if lightcurve_url %}
+              <a href="{{ lightcurve_url }}"
+                 class="btn btn-outline-secondary btn-sm ms-1"
+                 title="Public lightcurve for this target position">
+                Lightcurve
+              </a>
+            {% endif %}
+            {% if telegram_url %}
+              <a href="{{ telegram_url }}"
+                 class="btn btn-outline-secondary btn-sm ms-1"
+                 title="Telegram page for this target">
+                Telegram
+              </a>
+            {% endif %}
+            {% if can_publish_telegram %}
+              <form method="post" action="{% url 'tasks' task.id %}" class="d-inline">
+                {% csrf_token %}
+                {% if telegram_published %}
+                  <input type="hidden" name="action" value="unpublish_telegram">
+                  <button type="submit" class="btn btn-outline-danger btn-sm ms-1"
+                          title="Remove this target from Telegram. Other targets stay as they are.">
+                    Unpublish from Telegram
+                  </button>
+                {% else %}
+                  <input type="hidden" name="action" value="publish_telegram">
+                  <button type="submit" class="btn btn-primary btn-sm ms-1"
+                          title="Publish this target's photometry as a telegram (follow-up of the TNS alert). Other targets stay private.">
+                    Publish to Telegram{% if tns_alert.matched and tns_alert.on_target %} ({{ tns_alert.tns_name }}){% endif %}
+                  </button>
+                {% endif %}
+              </form>
+            {% elif telegram_published %}
+              <span class="badge text-bg-success ms-2">On Telegram</span>
+            {% endif %}
           </div>
+        {% endif %}
+
+        {% if can_publish_telegram or telegram_published %}
+          {% if 'photometry.pickle' not in files %}
+          <div class="mb-3">
+            {% if telegram_url %}
+              <a href="{{ telegram_url }}"
+                 class="btn btn-outline-secondary btn-sm"
+                 title="Telegram page for this target">Telegram</a>
+            {% endif %}
+            {% if can_publish_telegram %}
+              <form method="post" action="{% url 'tasks' task.id %}" class="d-inline">
+                {% csrf_token %}
+                {% if telegram_published %}
+                  <input type="hidden" name="action" value="unpublish_telegram">
+                  <button type="submit" class="btn btn-outline-danger btn-sm ms-1">
+                    Unpublish from Telegram
+                  </button>
+                {% else %}
+                  <input type="hidden" name="action" value="publish_telegram">
+                  <button type="submit" class="btn btn-primary btn-sm ms-1">
+                    Publish to Telegram{% if tns_alert.matched and tns_alert.on_target %} ({{ tns_alert.tns_name }}){% endif %}
+                  </button>
+                {% endif %}
+              </form>
+            {% endif %}
+          </div>
+          {% endif %}
         {% endif %}
 
         {% if 'target.vot' in files %}

@@ -21,6 +21,8 @@ from . import forms
 from . import celery_tasks
 from . import celery
 from . import processing
+from . import lightcurve
+from . import alerts
 
 def tasks(request, id=None):
     context = {}
@@ -48,6 +50,37 @@ def tasks(request, id=None):
         if task.celery_id is not None and request.method == 'POST':
             messages.warning(request, f"Task {id} is already running")
             return HttpResponseRedirect(request.path_info)
+
+        if request.method == 'POST':
+            action = request.POST.get('action')
+            if action in ('publish_telegram', 'unpublish_telegram'):
+                if not (request.user.is_authenticated and (request.user.is_staff or request.user == task.user)):
+                    messages.error(request, 'Only the observer can publish this photometry.')
+                    return HttpResponseRedirect(request.path_info)
+                published = action == 'publish_telegram'
+                n, point = lightcurve.set_published_for_task(task, published)
+                if not n or point is None:
+                    messages.error(
+                        request,
+                        'No target photometry to publish. Finish photometry (or subtraction) first.',
+                    )
+                    return HttpResponseRedirect(request.path_info)
+                name = point.target_name or f'{point.ra:.5f} {point.dec:.5f}'
+                telegram_url = reverse(
+                    'telegram_object',
+                    kwargs={'ra': f'{point.ra:.5f}', 'dec': f'{point.dec:.5f}'},
+                )
+                if published:
+                    messages.success(
+                        request,
+                        f'Published {n} measurement{"s" if n != 1 else ""} of {name} to Telegram.',
+                    )
+                    return HttpResponseRedirect(telegram_url)
+                messages.success(
+                    request,
+                    f'Removed {n} measurement{"s" if n != 1 else ""} of {name} from Telegram.',
+                )
+                return HttpResponseRedirect(request.path_info)
 
         all_forms = {}
 
@@ -209,6 +242,64 @@ def tasks(request, id=None):
 
         # Photometry quality warnings (stored in config by check_photometry_quality)
         context['photometry_warnings'] = task.config.get('photometry_warnings', [])
+
+        ra = task.config.get('target_ra')
+        dec = task.config.get('target_dec')
+        context['lightcurve_url'] = None
+        context['telegram_url'] = None
+        context['telegram_published'] = False
+        context['can_publish_telegram'] = False
+        if ra is not None and dec is not None:
+            try:
+                ra_s, dec_s = f'{float(ra):.5f}', f'{float(dec):.5f}'
+                context['lightcurve_url'] = reverse(
+                    'lightcurve_target', kwargs={'ra': ra_s, 'dec': dec_s},
+                )
+                context['telegram_url'] = reverse(
+                    'telegram_object', kwargs={'ra': ra_s, 'dec': dec_s},
+                )
+            except (TypeError, ValueError):
+                pass
+        point = models.LightcurvePoint.objects.filter(task=task).first()
+        has_phot = point is not None or (
+            'target.vot' in context['files'] or 'sub_target.vot' in context['files']
+        )
+        if point is not None:
+            context['telegram_published'] = bool(point.published)
+        if has_phot:
+            context['can_publish_telegram'] = bool(context['user_may_submit'] and not task.celery_id)
+
+        tns_alert = (task.config or {}).get('tns_alert')
+        stale_tns = (
+            tns_alert
+            and not tns_alert.get('matched')
+            and float(tns_alert.get('radius_arcsec') or 0) < 50
+        )
+        if (not tns_alert or stale_tns) and ra is not None and dec is not None:
+            name = str((task.config or {}).get('target') or '').splitlines()[0].strip()
+            try:
+                tns_alert = alerts.match_target(float(ra), float(dec), name=name)
+            except Exception:
+                tns_alert = None
+        context['tns_alert'] = tns_alert
+
+        ep_alert = (task.config or {}).get('ep_alert')
+        if not ep_alert:
+            image = os.path.join(path, 'image.fits')
+            try:
+                ep_alert = alerts.match_ep_alert(
+                    ra, dec,
+                    texts=(
+                        (task.config or {}).get('target'),
+                        (task.config or {}).get('fits_object'),
+                    ),
+                    image_path=image if os.path.exists(image) else None,
+                )
+            except Exception:
+                ep_alert = None
+            if ep_alert and not ep_alert.get('trigger') and not ep_alert.get('matched'):
+                ep_alert = None
+        context['ep_alert'] = ep_alert
 
         if 'candidates_simple.vot' in context['files']:
             candidates_simple = Table.read(os.path.join(path, 'candidates_simple.vot'))

@@ -420,3 +420,12 @@ class RegisterForm(UserCreationForm):
         if commit:
             user.save()
         return user
+
+
+class AccountShareForm(forms.Form):
+    affiliation = forms.CharField(
+        required=False,
+        max_length=120,
+        label='Affiliation',
+        help_text='Observatory or institute. Shown next to your name on public lightcurves and telegrams.',
+    )

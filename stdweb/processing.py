@@ -37,6 +37,37 @@ warnings.simplefilter(action='ignore', category=FITSFixedWarning)
 warnings.simplefilter(action='ignore', category=VerifyWarning)
 
 
+def _coerce_sn(config, default=5.0):
+    """config['sn'] is a numeric S/N cut, not a supernova name."""
+    try:
+        v = float(config.get('sn'))
+    except (TypeError, ValueError):
+        v = default
+    if not np.isfinite(v) or v == 0:
+        v = default
+    config['sn'] = v
+
+
+def _fits_pointing(header):
+    """Return (ra_deg, dec_deg) from FITS pointing keywords, or None."""
+    ra = header.get('RA')
+    dec = header.get('DEC')
+    try:
+        if ra is not None and dec is not None:
+            return float(ra), float(dec)
+    except (TypeError, ValueError):
+        pass
+    ra_s = header.get('OBJCTRA')
+    dec_s = header.get('OBJCTDEC')
+    if ra_s and dec_s:
+        try:
+            sc = SkyCoord(str(ra_s).strip(), str(dec_s).strip(), unit=(u.hourangle, u.deg))
+            return sc.ra.deg, sc.dec.deg
+        except Exception:
+            pass
+    return None
+
+
 # Supported filters and their aliases
 supported_filters = {
     # Johnson-Cousins
@@ -779,7 +810,7 @@ def inspect_image(filename, config, verbose=True, show=False):
     # Cleanup stale plots
     cleanup_paths(cleanup_inspect, basepath=basepath)
 
-    config['sn'] = config.get('sn') or 5
+    _coerce_sn(config)
     config['initial_aper'] = config.get('initial_aper') or 3
     config['initial_r0'] = config.get('initial_r0') if config.get('initial_r0') is not None else 0
     config['rel_aper'] = config.get('rel_aper') or 1
@@ -791,6 +822,12 @@ def inspect_image(filename, config, verbose=True, show=False):
     config['blend_radius'] = config.get('blend_radius') if config.get('blend_radius') is not None else 2.0
     config['refine_wcs'] = config.get('refine_wcs') if config.get('refine_wcs') is not None else True
     config['blind_match_wcs'] = config.get('blind_match_wcs') if config.get('blind_match_wcs') is not None else False
+    if config.get('blind_match_ps_lo') is None:
+        config['blind_match_ps_lo'] = 0.2
+    if config.get('blind_match_ps_up') is None:
+        config['blind_match_ps_up'] = 4.0
+    if config.get('blind_match_sr0') is None:
+        config['blind_match_sr0'] = 1.0
     config['hotpants_extra'] = config.get('hotpants_extra') or {'ko':0, 'bgo':0}
     config['sub_size'] = config.get('sub_size') or 1000
     config['sub_overlap'] = config.get('sub_overlap') if config.get('sub_overlap') is not None else 50
@@ -838,6 +875,10 @@ def inspect_image(filename, config, verbose=True, show=False):
                 config['filter'] = header.get(kw).strip()
                 break
     log(f"Filter is {config['filter']}")
+
+    obj = header.get('OBJECT')
+    if obj and str(obj).strip():
+        config['fits_object'] = str(obj).strip()
 
     # Normalize filters
     for fname in supported_filters.keys():
@@ -955,17 +996,46 @@ def inspect_image(filename, config, verbose=True, show=False):
         config['blind_match_wcs'] = True
         log("No usable WCS found, blind matching enabled")
 
-    # Target?..
-    if not 'target' in config:
-        config['target'] = str(header.get('TARGET'))
+    # Target: config (stdbatch/API) wins if it is a real name; otherwise FITS
+    # OBJECT / TARGET / pointing. Never resolve placeholders like "image" via Sesame.
+    _dummy = {
+        'none', 'null', 'nan', 'snva?none',
+        'image', 'snapshot', 'light', 'science', 'unknown', 'n/a', 'na', '?',
+    }
 
-    # Ignore placeholder values that effectively mean "no target" to avoid
-    # triggering slow external name resolution when the FITS header contains
-    # strings like "None" or "SNVA?None".
-    val = str(config.get('target', '')).strip()
-    if not val or val.lower() in ['none', 'null', 'nan', 'snva?none'] or val.lower().endswith('?none'):
-        config.pop('target', None)
-        log("No target specified (placeholder value ignored)")
+    def _is_dummy_name(s: str) -> bool:
+        v = str(s or '').strip()
+        if not v:
+            return True
+        low = v.lower()
+        return (
+            low in _dummy
+            or low.endswith('?none')
+            or low.endswith('.fits')
+            or low.endswith('.fit')
+            or low.endswith('.fts')
+        )
+
+    cfg_target = str(config.get('target', '')).strip() if 'target' in config else ''
+    if _is_dummy_name(cfg_target):
+        header_name = ''
+        for kw in ('OBJECT', 'TARGET', 'OBJNAME', 'OBJECTID'):
+            hv = header.get(kw)
+            if hv is not None and not _is_dummy_name(str(hv)):
+                header_name = str(hv).strip()
+                break
+        if header_name:
+            config['target'] = header_name
+            log(f"Target from FITS {kw}: {header_name}")
+        else:
+            ra = header.get('OBJCTRA')
+            dec = header.get('OBJCTDEC')
+            if ra and dec:
+                config['target'] = f"{str(ra).strip()} {str(dec).strip()}"
+                log(f"Target from FITS OBJCTRA/OBJCTDEC: {config['target']}")
+            else:
+                config.pop('target', None)
+                log("No target specified (placeholder value ignored)")
 
     if config.get('target'):
         config['targets'] = []
@@ -1014,13 +1084,24 @@ def inspect_image(filename, config, verbose=True, show=False):
 
                     if 'ra' not in target:
                         # Skip the slow stdpipe resolver for obvious transient names (SN/AT)
+                        # and campaign IDs that are never in Simbad (EP-…, EP_…).
                         _n = target['name'].lower().replace(" ", "")
                         if _n.startswith("sn") or _n.startswith("at"):
                             raise RuntimeError("Transient name – skip stdpipe resolver")
+                        if _n.startswith("ep-") or _n.startswith("ep_") or _n.startswith("ep017"):
+                            pointing = _fits_pointing(header)
+                            if pointing is not None:
+                                target['ra'], target['dec'] = pointing
+                                log(f"  Campaign id — using FITS pointing "
+                                    f"RA={target['ra']:.5f} Dec={target['dec']:.5f}")
+                            else:
+                                raise RuntimeError("Campaign / EP id – skip stdpipe resolver")
 
                     # First attempt: standard stdpipe resolver (Simbad/Sesame with path syntax)
                     if 'ra' not in target:
                         coords = resolve.resolve(target['name'])
+                        if coords is None:
+                            raise RuntimeError("Sesame returned no match")
                         target['ra'] = coords.ra.deg
                         target['dec'] = coords.dec.deg
                 except Exception as e:
@@ -1046,11 +1127,18 @@ def inspect_image(filename, config, verbose=True, show=False):
                             else:
                                 raise RuntimeError(f"Sesame fallback HTTP {r.status_code}")
                         except Exception as e_ses:
-                            # For transient names we do NOT abort here; we'll try TNS next.
-                            _n = target['name'].lower().replace(" ", "")
-                            if not (_n.startswith("sn") or _n.startswith("at")):
-                                # Non-transients: propagate the failure as before.
-                                raise e_ses
+                            # Header pointing (RA/DEC or OBJCTRA/OBJCTDEC) is enough
+                            # for campaign names that are not in Simbad.
+                            pointing = _fits_pointing(header)
+                            if pointing is not None:
+                                target['ra'], target['dec'] = pointing
+                                log(f"  Sesame failed ({e_ses}); using FITS pointing "
+                                    f"RA={target['ra']:.5f} Dec={target['dec']:.5f}")
+                            else:
+                                # For transient names we do NOT abort here; we'll try TNS next.
+                                _n = target['name'].lower().replace(" ", "")
+                                if not (_n.startswith("sn") or _n.startswith("at")):
+                                    raise e_ses
                             # Transient – log and continue to TNS CSV fallback
                             log("Sesame returned no coordinates, falling back to TNS public CSV…")
 
@@ -1511,7 +1599,7 @@ def photometry_image(filename, config, verbose=True, show=False):
         config['targets'] = [{'ra': config.get('target_ra'), 'dec': config.get('target_dec')}]
 
     # Normalize config: replace None (from optional form fields) with safe defaults
-    config['sn'] = config.get('sn') or 5
+    _coerce_sn(config)
     config['initial_aper'] = config.get('initial_aper') or 3
     config['initial_r0'] = config.get('initial_r0') if config.get('initial_r0') is not None else 0
     config['rel_aper'] = config.get('rel_aper') or 1
@@ -1523,6 +1611,12 @@ def photometry_image(filename, config, verbose=True, show=False):
     config['blend_radius'] = config.get('blend_radius') if config.get('blend_radius') is not None else 2.0
     config['refine_wcs'] = config.get('refine_wcs') if config.get('refine_wcs') is not None else True
     config['blind_match_wcs'] = config.get('blind_match_wcs') if config.get('blind_match_wcs') is not None else False
+    if config.get('blind_match_ps_lo') is None:
+        config['blind_match_ps_lo'] = 0.2
+    if config.get('blind_match_ps_up') is None:
+        config['blind_match_ps_up'] = 4.0
+    if config.get('blind_match_sr0') is None:
+        config['blind_match_sr0'] = 1.0
     config['hotpants_extra'] = config.get('hotpants_extra') or {'ko':0, 'bgo':0}
     config['sub_size'] = config.get('sub_size') or 1000
     config['sub_overlap'] = config.get('sub_overlap') if config.get('sub_overlap') is not None else 50
@@ -2607,7 +2701,7 @@ def subtract_image(filename, config, verbose=True, show=False):
     subtraction_method = config.get('subtraction_method') or 'hotpants'
 
     # Normalize config: replace None (from optional form fields) with safe defaults
-    config['sn'] = config.get('sn') or 5
+    _coerce_sn(config)
     config['initial_aper'] = config.get('initial_aper') or 3
     config['initial_r0'] = config.get('initial_r0') if config.get('initial_r0') is not None else 0
     config['rel_aper'] = config.get('rel_aper') or 1

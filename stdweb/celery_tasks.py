@@ -9,6 +9,7 @@ import numpy as np
 
 from . import models
 from . import processing
+from . import lightcurve
 
 
 def fix_config(config):
@@ -92,12 +93,22 @@ def task_inspect(self, id, finalize=True):
         log("\nError!\n", traceback.format_exc())
         task.state = 'inspect_failed'
     finally:
-        task.celery_id = None  # always clear
+        try:
+            from . import alerts
+            alerts.attach_alerts_to_config(
+                config, log=log, image_path=os.path.join(basepath, 'image.fits'),
+            )
+        except Exception as exc:
+            log(f"Alert lookup failed: {exc}")
         if finalize:
+            task.celery_id = None
             task.complete()
-
-        fix_config(config)
-        task.save()
+            fix_config(config)
+            task.save()
+        else:
+            # Do not write celery_id: this instance may be stale vs the chain id.
+            fix_config(config)
+            models.Task.objects.filter(pk=id).update(state=task.state, config=config)
 
 
 @shared_task(bind=True)
@@ -129,6 +140,10 @@ def task_photometry(self, id, finalize=True):
 
     fix_config(config)
     task.save()
+    try:
+        lightcurve.upsert_from_task(task)
+    except Exception:
+        pass
 
 
 @shared_task(bind=True)
@@ -190,3 +205,7 @@ def task_subtraction(self, id, finalize=True):
 
     fix_config(config)
     task.save()
+    try:
+        lightcurve.upsert_from_task(task)
+    except Exception:
+        pass

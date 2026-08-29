@@ -294,6 +294,11 @@ REST_FRAMEWORK = {
     ],
 }
 
+# /batch/upload is proxied through Django; FITS batches exceed the 2.5 MB default.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 500 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 32 * 1024 * 1024
+DATA_UPLOAD_MAX_NUMBER_FILES = 250
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,

@@ -9,7 +9,8 @@ from django.http import HttpResponse, Http404
 from django.conf import settings
 from rest_framework.authtoken.models import Token
 
-from .forms import RegisterForm
+from .forms import RegisterForm, AccountShareForm
+from .models import get_user_profile
 
 
 def register(request):
@@ -28,6 +29,26 @@ def register(request):
     else:
         form = RegisterForm()
     return render(request, "registration/register.html", {"form": form})
+
+
+@login_required
+def account(request):
+    profile = get_user_profile(request.user)
+    if request.method == 'POST':
+        form = AccountShareForm(request.POST)
+        if form.is_valid():
+            profile.affiliation = (form.cleaned_data.get('affiliation') or '').strip()
+            profile.save(update_fields=['affiliation'])
+            messages.success(request, 'Account saved.')
+            return redirect('account')
+    else:
+        form = AccountShareForm(initial={
+            'affiliation': profile.affiliation,
+        })
+    return render(request, 'account.html', {
+        'form': form,
+        'profile': profile,
+    })
 
 
 @login_required

@@ -1,8 +1,7 @@
 from django.contrib import admin
 from django import forms
 
-from .models import Task
-from .models import Preset
+from .models import Task, Preset, UserProfile, LightcurvePoint, AlertMeta
 
 from .forms import PrettyJSONEncoder
 
@@ -33,3 +32,23 @@ class PresetAdmin(admin.ModelAdmin):
 
 
 admin.site.register(Preset, PresetAdmin)
+
+
+@admin.register(UserProfile)
+class UserProfileAdmin(admin.ModelAdmin):
+    list_display = ['user', 'affiliation', 'share_public_lightcurves']
+    list_filter = ['share_public_lightcurves']
+    search_fields = ['user__username', 'user__email', 'affiliation']
+
+
+@admin.register(AlertMeta)
+class AlertMetaAdmin(admin.ModelAdmin):
+    list_display = ['name_key', 'tns_name', 'obj_type', 'discovery_iso', 'source', 'fetched']
+    search_fields = ['name_key', 'display_name', 'tns_name', 'host_name']
+
+
+@admin.register(LightcurvePoint)
+class LightcurvePointAdmin(admin.ModelAdmin):
+    list_display = ['id', 'task', 'user', 'filt', 'mjd', 'mag', 'is_detection', 'published']
+    list_filter = ['filt', 'is_detection', 'is_diff', 'published']
+    search_fields = ['target_name', 'user__username']

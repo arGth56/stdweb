@@ -1,0 +1,69 @@
+{% extends "lightcurve/base.html" %}
+{% load static %}
+
+{% block title %}{% if obj %}{{ obj.name }}{% else %}Object{% endif %}{% endblock %}
+
+{% block head %}
+  <script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js" charset="utf-8"></script>
+  <script src="{% static 'sky_tns.js' %}"></script>
+{% endblock %}
+
+{% block content %}
+  <p class="lc-back"><a href="{% url 'telegram' %}">← all objects</a></p>
+
+  {% if not obj %}
+    <h1>{{ tns.tns_name|default:"Object" }}</h1>
+    <p class="lc-lead">
+      <span class="lc-coords">{{ ra|floatformat:5 }}° {{ dec|floatformat:5 }}°</span>
+    </p>
+    {% include "lightcurve/sky_tns.html" %}
+    <p class="lc-empty">No public photometry at this position.</p>
+  {% else %}
+    <h1>{{ obj.name }}</h1>
+    <p class="lc-lead">
+      <span class="lc-coords">{{ obj.ra_s }}° {{ obj.dec_s }}°</span>
+      {% if obj.tns_url %}
+        · <a href="{{ obj.tns_url }}" target="_blank" rel="noopener">TNS</a>
+      {% endif %}
+      · <a href="{{ obj.lc_url }}">lightcurve</a>
+    </p>
+    <dl class="tns-meta">
+      <div><dt>Discovery</dt><dd>{{ obj.discovery_iso|default:"—" }}{% if obj.source and obj.source != "none" %} <span class="lc-muted">({{ obj.source }})</span>{% endif %}</dd></div>
+      <div><dt>Age of alert</dt><dd>{{ obj.age_now|default:"—" }}</dd></div>
+      <div><dt>Last photometry</dt><dd>{{ obj.last_mag }} {{ obj.last_filt }} · {{ obj.last_time }} · {{ obj.last_observer }}</dd></div>
+      <div><dt>Reporters</dt><dd>{{ obj.observers|join:", " }}</dd></div>
+    </dl>
+
+    {% include "lightcurve/sky_tns.html" with sky=obj.sky tns=obj.tns tns_offset=obj.tns_offset %}
+
+    <h2 class="tns-h2">Photometry</h2>
+    <div class="tns-wrap">
+      <table class="tns-table">
+        <thead>
+          <tr>
+            <th>UTC</th>
+            <th>MJD</th>
+            <th>Age</th>
+            <th>Mag</th>
+            <th>Filter</th>
+            <th>Observer</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in obj.rows %}
+            <tr>
+              <td class="num">{{ r.time }}</td>
+              <td class="num">{{ r.mjd|floatformat:5 }}</td>
+              <td class="num">{{ r.age|default:"—" }}</td>
+              <td class="num">{{ r.mag_s }}</td>
+              <td>{{ r.filt }}</td>
+              <td>{{ r.observer }}</td>
+              <td>{% if r.is_diff %}diff{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+{% endblock %}

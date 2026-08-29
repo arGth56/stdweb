@@ -77,6 +77,12 @@
             <li class="nav-item">
               <a class="nav-link {% if request.resolver_match.view_name == 'tasks' %}active{% endif %}" href="{% url 'tasks' %}">Tasks</a>
             </li>
+            <li class="nav-item">
+              <a class="nav-link" href="{% url 'lightcurve' %}">Lightcurves</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="{% url 'telegram' %}">Telegram</a>
+            </li>
             {% if perms.stdweb.skyportal_upload and settings.SKYPORTAL_TOKEN %}
               <li class="nav-item">
                 <a class="nav-link" href="{% url 'skyportal' %}">SkyPortal</a>
@@ -106,6 +112,10 @@
                       <a class="dropdown-item" href="{% url 'admin:index' %}">Admin Panel</a>
                     </li>
                   {% endif %}
+
+                  <li>
+                    <a class="dropdown-item" href="{% url 'account' %}">Account</a>
+                  </li>
 
                   <li>
                     <a class="dropdown-item" href="{% url 'password' %}?next={{ request.get_full_path }}">Change password</a>
