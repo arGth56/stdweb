@@ -1366,7 +1366,21 @@ def inspect_image(filename, config, verbose=True, show=False):
 
     # Time
     if not config.get('time'):
-        time = utils.get_obs_time(header=header, verbose=verbose)
+        time = None
+        # Prefer the exposure *midpoint* (DATE-AVG, written e.g. by N.I.N.A.)
+        # over the exposure *start* (DATE-OBS). The midpoint is the more correct
+        # epoch for photometry, especially for long exposures. Fall back to the
+        # usual keyword search (DATE-OBS, MJD, ...) if DATE-AVG is missing/bad.
+        if header is not None and header.get('DATE-AVG'):
+            try:
+                time = utils.get_obs_time(string=str(header['DATE-AVG']),
+                                          verbose=verbose)
+                if time is not None:
+                    log(f"Using DATE-AVG (exposure midpoint) as observation time: {header['DATE-AVG']}")
+            except Exception:
+                time = None
+        if time is None:
+            time = utils.get_obs_time(header=header, verbose=verbose)
 
         if time is not None:
             config['time'] = time.iso
