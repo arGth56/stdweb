@@ -1642,9 +1642,25 @@ def photometry_image(filename, config, verbose=True, show=False):
     # Mask
     mask = fits.getdata(os.path.join(basepath, 'mask.fits'), -1) > 0
 
+    # Guard against a stale mask.fits whose shape does not match the current image
+    # (e.g. leftover from a previous/foreign image in a reused task folder). Rather
+    # than crashing later in SExtractor, rebuild a basic mask from the image itself.
+    if mask.shape != image.shape:
+        log(f"Warning: mask.fits shape {mask.shape} does not match image {image.shape} — "
+            f"rebuilding mask from the image (NaN + saturation)")
+        mask = np.isnan(image)
+        if config.get('saturation'):
+            mask |= image >= config['saturation']
+        fits_write(os.path.join(basepath, 'mask.fits'), mask.astype(np.int8), compress=True)
+        log("Regenerated mask written to file:mask.fits")
+
     # Custom mask
     if os.path.exists(os.path.join(basepath, 'custom_mask.fits')):
         custom_mask = fits.getdata(os.path.join(basepath, 'custom_mask.fits'), -1) > 0
+        if custom_mask.shape != image.shape:
+            log(f"Warning: custom_mask.fits shape {custom_mask.shape} does not match image "
+                f"{image.shape} — ignoring stale custom mask")
+            custom_mask = None
     else:
         custom_mask = None
 
