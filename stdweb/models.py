@@ -7,6 +7,7 @@ from django.conf import settings
 
 import os, shutil
 import datetime
+import secrets
 
 
 class Task(models.Model):
@@ -177,3 +178,22 @@ class TelegramNotice(models.Model):
 
     def __str__(self):
         return f"{self.object_name} ({self.user.username})"
+
+
+class TelegramSubscriber(models.Model):
+    """An email that receives a notification whenever a new telegram is published."""
+    email = models.EmailField(unique=True)
+    token = models.CharField(max_length=64, unique=True, editable=False)
+    confirmed = models.BooleanField(default=True)
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created']
+
+    def save(self, *args, **kwargs):
+        if not self.token:
+            self.token = secrets.token_urlsafe(32)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.email

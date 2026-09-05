@@ -57,6 +57,8 @@ urlpatterns = [
     ),
     path('telegram', views_telegram.telegram_slash),
     path('telegram/', views_telegram.index, name='telegram'),
+    path('telegram/subscribe/', views_telegram.subscribe, name='telegram_subscribe'),
+    path('telegram/unsubscribe/<str:token>/', views_telegram.unsubscribe, name='telegram_unsubscribe'),
     path('telegram/<int:pk>/', views_telegram.detail, name='telegram_detail'),
     path('telegram/<int:pk>/cutout.png', views_telegram.cutout_png, name='telegram_cutout'),
     re_path(

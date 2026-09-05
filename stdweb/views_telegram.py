@@ -1,13 +1,20 @@
 """Public telegrams: one editable notice per published measurement."""
 from __future__ import annotations
 
+import requests
+
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.http import HttpResponse, HttpResponsePermanentRedirect, HttpResponseRedirect
 from django.shortcuts import get_object_or_404
 from django.template.response import TemplateResponse
 from django.urls import reverse
+from django.views.decorators.http import require_POST
 
+from . import celery_tasks
 from . import lightcurve
 from . import models
 from . import telegram as tg
@@ -71,6 +78,96 @@ def index(request):
         'objects': objects,
         'query': query,
     })
+
+
+def _verify_turnstile(request, expected_action='subscribe'):
+    """Canonical Cloudflare Turnstile siteverify.
+
+    The browser posts ``cf-turnstile-response``; we redeem it server-side and
+    require ``success`` *and* the expected ``action`` *and* a frontend
+    ``hostname`` from this deployment's allowlist. The token is single-use.
+    """
+    token = request.POST.get('cf-turnstile-response', '')
+    if not token or len(token) > 2048:
+        return False
+
+    # Frontend hostnames this deployment accepts. Prefer an explicit allowlist
+    # from .env; otherwise fall back to the (ALLOWED_HOSTS-validated) request host.
+    allow = [h.strip() for h in getattr(settings, 'TURNSTILE_HOSTNAMES', '').split(',') if h.strip()]
+    if not allow:
+        allow = [request.get_host().split(':')[0]]
+
+    try:
+        resp = requests.post(
+            'https://challenges.cloudflare.com/turnstile/v0/siteverify',
+            data={
+                'secret': settings.TURNSTILE_SECRET_KEY,
+                'response': token,
+                'remoteip': (request.META.get('HTTP_CF_CONNECTING_IP')
+                             or request.META.get('REMOTE_ADDR', '')),
+            },
+            timeout=10,
+        )
+        result = resp.json()
+    except Exception:
+        return False
+
+    if not result.get('success'):
+        return False
+    # Cloudflare's official dev *test* keys always pass but report hostname
+    # 'example.com' and no action; skip the strict checks for them only. Real
+    # production keys never set this flag, so prod stays fully enforced.
+    if (result.get('metadata') or {}).get('result_with_testing_key'):
+        return True
+    # A widget with data-action set echoes it back; enforce it when present.
+    action = result.get('action')
+    if expected_action and action and action != expected_action:
+        return False
+    # Cloudflare always returns the solving hostname on success; require a match.
+    hostname = result.get('hostname')
+    if hostname and hostname not in allow:
+        return False
+    return True
+
+
+@require_POST
+def subscribe(request):
+    """Public: add an email to the telegram notification list (captcha-protected)."""
+    next_url = reverse('telegram')
+    email = (request.POST.get('email') or '').strip().lower()
+
+    try:
+        validate_email(email)
+    except ValidationError:
+        messages.error(request, 'Please enter a valid email address.')
+        return HttpResponseRedirect(next_url)
+
+    if not _verify_turnstile(request):
+        messages.error(request, 'Captcha verification failed. Please try again.')
+        return HttpResponseRedirect(next_url)
+
+    sub, created = models.TelegramSubscriber.objects.get_or_create(email=email)
+    if created:
+        try:
+            tg.send_subscription_welcome(request, sub)
+        except Exception:
+            pass
+        messages.success(request, f'{email} is now subscribed to telegram alerts.')
+    else:
+        messages.info(request, f'{email} is already subscribed.')
+    return HttpResponseRedirect(next_url)
+
+
+def unsubscribe(request, token):
+    """One-click opt-out from the link included in every notification email."""
+    sub = models.TelegramSubscriber.objects.filter(token=token).first()
+    if sub:
+        email = sub.email
+        sub.delete()
+        messages.success(request, f'{email} has been unsubscribed from telegram alerts.')
+    else:
+        messages.info(request, 'This unsubscribe link is no longer valid.')
+    return HttpResponseRedirect(reverse('telegram'))
 
 
 def detail(request, pk):
@@ -180,7 +277,7 @@ def compose(request, id):
                 point.target_name = object_name[:250]
             point.published = True
             point.save()
-            notice, _ = models.TelegramNotice.objects.update_or_create(
+            notice, created = models.TelegramNotice.objects.update_or_create(
                 point=point,
                 defaults={
                     'user': task.user,
@@ -191,6 +288,12 @@ def compose(request, id):
                     'body': body,
                 },
             )
+            if created:
+                # Notify subscribers only on first publication, not on edits.
+                try:
+                    celery_tasks.task_notify_subscribers.delay(notice.id)
+                except Exception:
+                    pass
             messages.success(request, f'Published telegram for {object_name}.')
             return HttpResponseRedirect(
                 reverse('telegram_detail', kwargs={'pk': notice.id}),

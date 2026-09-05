@@ -25,6 +25,49 @@ def task_url(request, task_id):
     return public_base(request) + reverse('tasks', kwargs={'id': task_id})
 
 
+def _unsubscribe_url(base, subscriber):
+    return base + reverse('telegram_unsubscribe', kwargs={'token': subscriber.token})
+
+
+def send_subscription_welcome(request, subscriber):
+    """Confirmation email sent right after someone subscribes."""
+    from django.core.mail import send_mail
+    base = public_base(request)
+    subject = 'Subscribed to STDWeb telegrams'
+    body = (
+        "You are now subscribed to STDWeb telegrams.\n"
+        "You will receive an email whenever a new telegram is published.\n\n"
+        f"Browse telegrams: {base + reverse('telegram')}\n\n"
+        f"Unsubscribe at any time: {_unsubscribe_url(base, subscriber)}\n"
+    )
+    send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [subscriber.email],
+              fail_silently=True)
+
+
+def telegram_notification(notice, subscriber, base):
+    """Return (subject, body) for a 'new telegram published' notification email."""
+    point = notice.point
+    detail_url = base + reverse('telegram_detail', kwargs={'pk': notice.id})
+    task_link = base + reverse('tasks', kwargs={'id': point.task_id})
+    subject = f"[STDWeb Telegram] {notice.object_name}"
+    lines = [
+        notice.title or notice.object_name,
+        '',
+        f"Object:   {notice.object_name}",
+        f"Measure:  {mag_string(point)} {point.filt or ''}".rstrip(),
+        f"UTC:      {(point.time_iso or '')[:19]}",
+        f"Observer: {observer_line(notice.user)}",
+        '',
+        (notice.body or '').strip(),
+        '',
+        f"Details:  {detail_url}",
+        f"Task:     {task_link}",
+        '',
+        f"Unsubscribe: {_unsubscribe_url(base, subscriber)}",
+    ]
+    return subject, '\n'.join(lines)
+
+
 def mag_string(point):
     if point.is_detection and point.mag is not None:
         if point.magerr is not None:
@@ -232,6 +275,33 @@ def _mark_radii(task):
     return max(r1, 3.0), r2, r3
 
 
+def _target_mark_radec(task, plane):
+    """Sky position to mark on the cutout: the *measured* (centroided) target
+    position from the photometry table, so the crosshair/aperture sits on the
+    photocentre rather than the raw catalogue coordinates. Returns (None, None)
+    if no measurement is available (caller falls back to target_ra/target_dec)."""
+    import math
+    try:
+        from astropy.table import Table
+    except Exception:
+        return None, None
+    base = task.path()
+    names = ['sub_target.vot', 'target.vot'] if plane == 'diff' else ['target.vot', 'sub_target.vot']
+    for name in names:
+        p = os.path.join(base, name)
+        if not os.path.exists(p):
+            continue
+        try:
+            t = Table.read(p)
+            if len(t) and 'ra' in t.colnames and 'dec' in t.colnames:
+                ra, dec = float(t['ra'][0]), float(t['dec'][0])
+                if math.isfinite(ra) and math.isfinite(dec):
+                    return ra, dec
+        except Exception:
+            continue
+    return None, None
+
+
 def render_illustration(task):
     """PNG of the target cutout with the photometry aperture drawn on the pixels."""
     rel = cutout_relpath(task)
@@ -262,7 +332,12 @@ def render_illustration(task):
 
     arr = np.asarray(cutout[plane], dtype=float)
     config = task.config or {}
-    ra, dec = config.get('target_ra'), config.get('target_dec')
+    # Mark where photometry was actually measured (the centroided target
+    # position), not the raw catalogue coordinates, so the crosshair sits on
+    # the photocentre. Fall back to the catalogue position if unavailable.
+    ra, dec = _target_mark_radec(task, plane)
+    if ra is None or dec is None:
+        ra, dec = config.get('target_ra'), config.get('target_dec')
     mark_r, mark_r2, mark_r3 = _mark_radii(task)
 
     x = y = None
