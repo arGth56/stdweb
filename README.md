@@ -11,8 +11,35 @@ It currently allows you to:
 - Subtract either user-provided or automatically downloaded template images
 - Do forced photometry for a specified target in either original or difference image
 - Do (experimental) transient detection in difference image
+- Publish a single forced-photometry measurement as a public telegram (ATel-style text, task link, target cutout)
 
 If you want to better understand the routines used for it, please consult [STDPipe documentation](https://stdpipe.readthedocs.io/) and [example notebooks](https://github.com/karpov-sv/stdpipe/tree/master/notebooks), as well as the [paper describing it](https://ojs.cvut.cz/ojs/index.php/ap/article/view/9969)
+
+# Telegram
+
+A telegram is a public photometry notice for **one finished task**: one editable text, one magnitude, a public link to that task, and a target cutout with the photometry aperture drawn on it. It is a follow-up of an alert (TNS supernova, EP-WXT / GCN, …), not a lightcurve.
+
+## Publishing
+
+Photometry stays private until you publish it.
+
+1. Finish **photometry** (or **subtraction**) on a task so a target measurement exists.
+2. Set your **affiliation** on [Account](/account/) (shown next to your name). Optionally set the cone radius used to match a TNS/EP alert and the expected alert-age window.
+3. On the task page click **Publish to Telegram**. That opens a compose page for **this measurement only** — other tasks stay private.
+4. Edit the pre-filled ATel-style draft (object name, title, body, alert URL). The object should be the **alert name** (e.g. `SN 2026fvx` or `EP-WXT 01709274151`), not coordinates.
+5. Submit. The public page is `/telegram/<id>/`.
+
+**Unpublish from Telegram** on the same task removes that notice.
+
+The draft is filled from the observer name + affiliation, the magnitude and filter, the observation time, the age of the alert when known, `https://stdweb.org.uk/tasks/<id>` (or `SITE_PUBLIC_BASE_URL` if set), and the TNS or GCN link when inspect matched one. Beside the text, the compose and public pages show the target cutout with a crosshair and aperture overlay printed on the pixels.
+
+Tasks are readable without logging in, so the task URL in the telegram is public. The cutout URL is public only after the telegram is published.
+
+## Catalogue
+
+`/telegram/` lists published notices (object = alert name, measure, time, observer). The site navigation bar is the same as on Files and Tasks (STDWeb · Files · Tasks · Telegram).
+
+Inspect on the task page reports whether a TNS alert sits at the target, or an Einstein Probe WXT trigger appears in GCN. That match is used to pre-fill the object name and alert link; you can still edit both before publishing.
 
 # Installation
 
@@ -77,6 +104,8 @@ Example of that file with various options is given below:
 SECRET_KEY = 'your django secret key goes here'
 
 DEBUG = True
+
+REGISTRATION_OPEN = True
 
 DATA_PATH = /opt/stdweb/data/
 TASKS_PATH = /opt/stdweb/tasks/

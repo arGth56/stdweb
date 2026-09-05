@@ -37,6 +37,37 @@ warnings.simplefilter(action='ignore', category=FITSFixedWarning)
 warnings.simplefilter(action='ignore', category=VerifyWarning)
 
 
+def _coerce_sn(config, default=5.0):
+    """config['sn'] is a numeric S/N cut, not a supernova name."""
+    try:
+        v = float(config.get('sn'))
+    except (TypeError, ValueError):
+        v = default
+    if not np.isfinite(v) or v == 0:
+        v = default
+    config['sn'] = v
+
+
+def _fits_pointing(header):
+    """Return (ra_deg, dec_deg) from FITS pointing keywords, or None."""
+    ra = header.get('RA')
+    dec = header.get('DEC')
+    try:
+        if ra is not None and dec is not None:
+            return float(ra), float(dec)
+    except (TypeError, ValueError):
+        pass
+    ra_s = header.get('OBJCTRA')
+    dec_s = header.get('OBJCTDEC')
+    if ra_s and dec_s:
+        try:
+            sc = SkyCoord(str(ra_s).strip(), str(dec_s).strip(), unit=(u.hourangle, u.deg))
+            return sc.ra.deg, sc.dec.deg
+        except Exception:
+            pass
+    return None
+
+
 # Supported filters and their aliases
 supported_filters = {
     # Johnson-Cousins
@@ -258,6 +289,63 @@ def get_wcs(filename, header=None, verbose=True):
     return wcs
 
 
+def _wcs_match_count(obj, cat, wcs, sr_deg, cat_col_ra='RAJ2000', cat_col_dec='DEJ2000'):
+    """How many detections land on catalogue stars within `sr_deg`."""
+    if (
+        wcs is None
+        or not getattr(wcs, 'is_celestial', False)
+        or obj is None
+        or cat is None
+        or not cat_col_ra
+        or not cat_col_dec
+        or cat_col_ra not in getattr(cat, 'colnames', [])
+        or cat_col_dec not in getattr(cat, 'colnames', [])
+    ):
+        return 0, None
+    try:
+        ra, dec = wcs.all_pix2world(np.asarray(obj['x'], float), np.asarray(obj['y'], float), 0)
+        _, _, dist = astrometry.spherical_match(
+            ra, dec,
+            np.asarray(cat[cat_col_ra], float),
+            np.asarray(cat[cat_col_dec], float),
+            sr_deg,
+        )
+    except Exception:
+        return 0, None
+    n = int(len(dist))
+    if n == 0:
+        return 0, None
+    return n, float(np.median(dist) * 3600.0)
+
+
+def _wcs_as_tpv(wcs, obj=None, cat=None, sr_deg=None, cat_col_ra=None, cat_col_dec=None, log=None):
+    """SIP → TPV without a SCAMP re-fit, for SWarp. Keep SIP if conversion wrecks matches."""
+    log = log or (lambda *args, **kwargs: None)
+    if wcs is None or not getattr(wcs, 'is_celestial', False) or getattr(wcs, 'sip', None) is None:
+        return wcs
+    try:
+        wcs2 = WCS(astrometry.wcs_sip2pv(wcs.to_header(relax=True)))
+    except Exception as exc:
+        log(f"SIP to TPV conversion failed ({exc}); keeping SIP WCS")
+        return wcs
+    if not wcs2.is_celestial:
+        return wcs
+    if obj is not None and cat is not None and sr_deg:
+        n_sip, _ = _wcs_match_count(obj, cat, wcs, sr_deg, cat_col_ra, cat_col_dec)
+        n_tpv, _ = _wcs_match_count(obj, cat, wcs2, sr_deg, cat_col_ra, cat_col_dec)
+        if n_sip >= 15 and n_tpv < 0.5 * n_sip:
+            log(f"SIP to TPV dropped matches {n_sip} → {n_tpv}; keeping SIP WCS")
+            return wcs
+    log("Converted SIP WCS to TPV for SWarp (no SCAMP re-fit)")
+    return wcs2
+
+
+def _fmt_match_stats(n, med):
+    if med is None:
+        return f"{n} matches"
+    return f"{n} matches, median {med:.2f} arcsec"
+
+
 def fix_header(header, verbose=True):
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
@@ -438,6 +526,10 @@ def guess_vizier_catalogues(ra, dec):
 def guess_catalogue_mag_columns(fname, cat):
     cat_col_mag = None
     cat_col_mag_err = None
+
+    # Cross-match helpers may return None on failures or no rows.
+    if cat is None:
+        return cat_col_mag, cat_col_mag_err
 
     # Most of augmented catalogues
     if f"{fname}mag" in cat.colnames:
@@ -694,6 +786,15 @@ def filter_vizier_blends(
             col_dec=obj_col_dec,
         )
 
+        # Some catalog queries may fail or return no rows; skip gracefully.
+        if xcat is None or not len(xcat):
+            log(
+                np.sum(cand_idx),
+                'remains after matching blends with',
+                catalogs.catalogs.get(catname, {'name': catname})['name'],
+            )
+            continue
+
         if fname is not None:
             # Find relevant magnitude and coordinate columns
             cat_col_mag,_ = guess_catalogue_mag_columns(fname, xcat)
@@ -766,23 +867,29 @@ def inspect_image(filename, config, verbose=True, show=False):
     # Cleanup stale plots
     cleanup_paths(cleanup_inspect, basepath=basepath)
 
-    config['sn'] = config.get('sn', 5)
-    config['initial_aper'] = config.get('initial_aper', 3)
-    config['initial_r0'] = config.get('initial_r0', 0)
-    config['rel_aper'] = config.get('rel_aper', 1)
-    config['rel_bg1'] = config.get('rel_bg1', 5)
-    config['rel_bg2'] = config.get('rel_bg2', 7)
-    config['spatial_order'] = config.get('spatial_order', 2)
-    config['minarea'] = config.get('minarea', 5)
-    config['use_color'] = config.get('use_color', True)
-    config['blend_radius'] = config.get('blend_radius', 2.0)
-    config['refine_wcs'] = config.get('refine_wcs', True)
-    config['blind_match_wcs'] = config.get('blind_match_wcs', False)
-    config['hotpants_extra'] = config.get('hotpants_extra', {'ko':0, 'bgo':0})
-    config['sub_size'] = config.get('sub_size', 1000)
-    config['sub_overlap'] = config.get('sub_overlap', 50)
-    config['sub_verbose'] = config.get('sub_verbose', False)
-    config['subtraction_mode'] = config.get('subtraction_mode', 'detection')
+    _coerce_sn(config)
+    config['initial_aper'] = config.get('initial_aper') or 3
+    config['initial_r0'] = config.get('initial_r0') if config.get('initial_r0') is not None else 0
+    config['rel_aper'] = config.get('rel_aper') or 1
+    config['rel_bg1'] = config.get('rel_bg1') or 5
+    config['rel_bg2'] = config.get('rel_bg2') or 7
+    config['spatial_order'] = config.get('spatial_order') if config.get('spatial_order') is not None else 2
+    config['minarea'] = config.get('minarea') or 5
+    config['use_color'] = config.get('use_color') if config.get('use_color') is not None else True
+    config['blend_radius'] = config.get('blend_radius') if config.get('blend_radius') is not None else 2.0
+    config['refine_wcs'] = config.get('refine_wcs') if config.get('refine_wcs') is not None else True
+    config['blind_match_wcs'] = config.get('blind_match_wcs') if config.get('blind_match_wcs') is not None else False
+    if config.get('blind_match_ps_lo') is None:
+        config['blind_match_ps_lo'] = 0.2
+    if config.get('blind_match_ps_up') is None:
+        config['blind_match_ps_up'] = 4.0
+    if config.get('blind_match_sr0') is None:
+        config['blind_match_sr0'] = 1.0
+    config['hotpants_extra'] = config.get('hotpants_extra') or {'ko':0, 'bgo':0}
+    config['sub_size'] = config.get('sub_size') or 1000
+    config['sub_overlap'] = config.get('sub_overlap') if config.get('sub_overlap') is not None else 50
+    config['sub_verbose'] = config.get('sub_verbose') if config.get('sub_verbose') is not None else False
+    config['subtraction_mode'] = config.get('subtraction_mode') or 'detection'
 
     # Fix some initial problems with the image like compression etc
     pre_fix_image(filename, verbose=verbose)
@@ -826,6 +933,10 @@ def inspect_image(filename, config, verbose=True, show=False):
                 break
     log(f"Filter is {config['filter']}")
 
+    obj = header.get('OBJECT')
+    if obj and str(obj).strip():
+        config['fits_object'] = str(obj).strip()
+
     # Normalize filters
     for fname in supported_filters.keys():
         if config['filter'] in supported_filters[fname]['aliases']:
@@ -839,21 +950,42 @@ def inspect_image(filename, config, verbose=True, show=False):
         config['filter'] = 'r'
 
     # Saturation
+    img_max    = np.nanmax(image)
+    img_median = np.nanmedian(image)
+
+    # Validate any previously stored saturation (e.g. from a prior inspection run or FITS header)
+    # If it is <= 2x the sky median it almost certainly refers to raw detector ADU while the image
+    # has been calibrated (bias/flat/e- units), which would flag all stars as saturated.
+    if config.get('saturation') and config['saturation'] <= 2.0 * img_median:
+        log(f"Warning: stored saturation level ({config['saturation']:.0f}) is only "
+            f"{config['saturation']/img_median:.1f}x the sky median ({img_median:.0f}) — "
+            f"resetting to image-based estimate.")
+        config.pop('saturation', None)
+
     if not config.get('saturation'):
         satlevel = header.get(
             'SATURATE',
             header.get('DATAMAX')
         )
+
+        if satlevel:
+            # Same sanity check on the header value
+            if satlevel <= 2.0 * img_median:
+                log(f"Warning: header saturation level ({satlevel:.0f}) is only "
+                    f"{satlevel/img_median:.1f}x the sky median ({img_median:.0f}) — "
+                    f"this looks like a raw-ADU value on a calibrated image. Ignoring it.")
+                satlevel = None
+            elif satlevel < 0.5 * img_max:
+                log(f"Warning: header saturation level ({satlevel:.0f}) is significantly "
+                    f"smaller than image max value ({img_max:.0f})!")
+            elif satlevel > img_max:
+                log(f"Warning: header saturation level ({satlevel:.0f}) is larger than "
+                    f"image max value ({img_max:.0f}).")
+
         if satlevel:
             log("Got saturation level from FITS header")
-
-            if satlevel < 0.5*np.nanmax(image):
-                log(f"Warning: header saturation level ({satlevel}) is significantly smaller than image max value!")
-            elif satlevel > np.nanmax(image):
-                log(f"Warning: header saturation level ({satlevel}) is larger than image max value!")
-
         else:
-            satlevel = 0.05*np.nanmedian(image) + 0.95*np.nanmax(image) # med + 0.95(max-med)
+            satlevel = 0.05 * img_median + 0.95 * img_max  # sky + 0.95*(max-sky)
             log("Estimating saturation level from the image max value")
 
         config['saturation'] = satlevel
@@ -921,9 +1053,46 @@ def inspect_image(filename, config, verbose=True, show=False):
         config['blind_match_wcs'] = True
         log("No usable WCS found, blind matching enabled")
 
-    # Target?..
-    if not 'target' in config:
-        config['target'] = str(header.get('TARGET'))
+    # Target: config (stdbatch/API) wins if it is a real name; otherwise FITS
+    # OBJECT / TARGET / pointing. Never resolve placeholders like "image" via Sesame.
+    _dummy = {
+        'none', 'null', 'nan', 'snva?none',
+        'image', 'snapshot', 'light', 'science', 'unknown', 'n/a', 'na', '?',
+    }
+
+    def _is_dummy_name(s: str) -> bool:
+        v = str(s or '').strip()
+        if not v:
+            return True
+        low = v.lower()
+        return (
+            low in _dummy
+            or low.endswith('?none')
+            or low.endswith('.fits')
+            or low.endswith('.fit')
+            or low.endswith('.fts')
+        )
+
+    cfg_target = str(config.get('target', '')).strip() if 'target' in config else ''
+    if _is_dummy_name(cfg_target):
+        header_name = ''
+        for kw in ('OBJECT', 'TARGET', 'OBJNAME', 'OBJECTID'):
+            hv = header.get(kw)
+            if hv is not None and not _is_dummy_name(str(hv)):
+                header_name = str(hv).strip()
+                break
+        if header_name:
+            config['target'] = header_name
+            log(f"Target from FITS {kw}: {header_name}")
+        else:
+            ra = header.get('OBJCTRA')
+            dec = header.get('OBJCTDEC')
+            if ra and dec:
+                config['target'] = f"{str(ra).strip()} {str(dec).strip()}"
+                log(f"Target from FITS OBJCTRA/OBJCTDEC: {config['target']}")
+            else:
+                config.pop('target', None)
+                log("No target specified (placeholder value ignored)")
 
     if config.get('target'):
         config['targets'] = []
@@ -934,10 +1103,189 @@ def inspect_image(filename, config, verbose=True, show=False):
             if target_name:
                 log(f"{target_title} is {target['name']}")
                 try:
-                    coords = resolve.resolve(target['name'])
-                    target['ra'] = coords.ra.deg
-                    target['dec'] = coords.dec.deg
+                    # ── Step 0: try direct coordinate parsing ──────────────────────────
+                    # Handles "163.1522 22.9317", "10 52 36.5 +22 55 54", etc.
+                    import re as _re2
+                    from astropy.coordinates import SkyCoord
+                    import astropy.units as _u
 
+                    _stripped = target['name'].strip()
+                    # A coordinate string contains at least one space and starts with a digit or +/-
+                    _looks_like_coords = (
+                        ' ' in _stripped and
+                        _re2.match(r'^[\d+\-]', _stripped)
+                    )
+                    # A bare decimal number (single token, no letters) is likely an incomplete coord
+                    _bare_number = _re2.match(r'^[\+\-]?\d+(\.\d+)?$', _stripped)
+
+                    if _bare_number:
+                        raise ValueError(
+                            f"Target '{_stripped}' looks like a single coordinate value (RA only?). "
+                            "Please enter both RA and Dec, e.g. '163.152 22.932' or '10 52 36.5 +22 55 54'."
+                        )
+
+                    if _looks_like_coords:
+                        try:
+                            # Try decimal degrees first, then sexagesimal
+                            parts = _stripped.split()
+                            if len(parts) == 2:
+                                _sc = SkyCoord(float(parts[0]), float(parts[1]), unit=_u.deg)
+                            else:
+                                _sc = SkyCoord(_stripped, unit=(_u.hourangle, _u.deg))
+                            target['ra']  = _sc.ra.deg
+                            target['dec'] = _sc.dec.deg
+                            log(f"  Resolved as coordinates: RA={target['ra']:.5f}, Dec={target['dec']:.5f}")
+                        except Exception as _ce:
+                            # Doesn't parse as coords either — fall through to Sesame
+                            pass
+
+                    if 'ra' not in target:
+                        # Skip the slow stdpipe resolver for obvious transient names (SN/AT)
+                        # and campaign IDs that are never in Simbad (EP-…, EP_…).
+                        _n = target['name'].lower().replace(" ", "")
+                        if _n.startswith("sn") or _n.startswith("at"):
+                            raise RuntimeError("Transient name – skip stdpipe resolver")
+                        if _n.startswith("ep-") or _n.startswith("ep_") or _n.startswith("ep017"):
+                            pointing = _fits_pointing(header)
+                            if pointing is not None:
+                                target['ra'], target['dec'] = pointing
+                                log(f"  Campaign id — using FITS pointing "
+                                    f"RA={target['ra']:.5f} Dec={target['dec']:.5f}")
+                            else:
+                                raise RuntimeError("Campaign / EP id – skip stdpipe resolver")
+
+                    # First attempt: standard stdpipe resolver (Simbad/Sesame with path syntax)
+                    if 'ra' not in target:
+                        coords = resolve.resolve(target['name'])
+                        if coords is None:
+                            raise RuntimeError("Sesame returned no match")
+                        target['ra'] = coords.ra.deg
+                        target['dec'] = coords.dec.deg
+                except Exception as e:
+                    if 'ra' in target:
+                        pass  # already resolved as coordinates above, ignore exception
+                    else:
+                        # Fallback for the 2025-08-16 change in Sesame URL API: try the "?name" syntax
+                        try:
+                            import requests, xml.etree.ElementTree as ET
+
+                            url = f"https://cds.unistra.fr/cgi-bin/nph-sesame/-oxp?{requests.utils.quote(target['name'])}"
+                            r = requests.get(url, timeout=10)
+                            if r.ok:
+                                root = ET.fromstring(r.text)
+                                # Look for first <Target>/<Resolver> that has <jradeg> & <jdedeg>
+                                jra = root.find('.//jradeg')
+                                jde = root.find('.//jdedeg')
+                                if jra is not None and jde is not None:
+                                    target['ra'] = float(jra.text)
+                                    target['dec'] = float(jde.text)
+                                else:
+                                    raise ValueError("Sesame XML missing coordinates")
+                            else:
+                                raise RuntimeError(f"Sesame fallback HTTP {r.status_code}")
+                        except Exception as e_ses:
+                            # Header pointing (RA/DEC or OBJCTRA/OBJCTDEC) is enough
+                            # for campaign names that are not in Simbad.
+                            pointing = _fits_pointing(header)
+                            if pointing is not None:
+                                target['ra'], target['dec'] = pointing
+                                log(f"  Sesame failed ({e_ses}); using FITS pointing "
+                                    f"RA={target['ra']:.5f} Dec={target['dec']:.5f}")
+                            else:
+                                # For transient names we do NOT abort here; we'll try TNS next.
+                                _n = target['name'].lower().replace(" ", "")
+                                if not (_n.startswith("sn") or _n.startswith("at")):
+                                    raise e_ses
+                            # Transient – log and continue to TNS CSV fallback
+                            log("Sesame returned no coordinates, falling back to TNS public CSV…")
+
+                            # --- TNS fallback (runs immediately here) ---
+                            try:
+                                import csv, io, urllib.parse as _up, time as _time, re as _re
+                                import requests
+
+                                # Bare name without "AT "/"SN " prefix (TNS URLs use the bare name)
+                                bare_name = _re.sub(r'^(AT|SN)\s*', '', target['name'], flags=_re.IGNORECASE).strip()
+
+                                def _norm(s):
+                                    return str(s).strip().lower().replace(" ", "")
+
+                                _ua_headers = {"User-Agent": "Mozilla/5.0 (compatible; stdweb/1.0)"}
+
+                                def _get_with_retries(url, timeout, attempts=3, backoff_s=2):
+                                    last_exc = None
+                                    for i in range(attempts):
+                                        try:
+                                            return requests.get(
+                                                url,
+                                                headers=_ua_headers,
+                                                timeout=timeout,
+                                                allow_redirects=True,
+                                            )
+                                        except Exception as exc:
+                                            last_exc = exc
+                                            if i < attempts - 1:
+                                                delay = backoff_s * (i + 1)
+                                                log(
+                                                    f"TNS request failed ({type(exc).__name__}): {exc}. "
+                                                    f"Retry {i + 1}/{attempts - 1} in {delay}s"
+                                                )
+                                                _time.sleep(delay)
+                                    raise last_exc
+
+                                # --- Strategy 1: direct TNS object page (no auth required) ---
+                                # The public page at wis-tns.org/object/<name> embeds decimal
+                                # RA/Dec directly in the HTML, e.g. "131.52412414551 +10.794554710388"
+                                tns_obj_url = f"https://www.wis-tns.org/object/{_up.quote(bare_name)}"
+                                log(f"TNS object page: GET {tns_obj_url}")
+                                rr = _get_with_retries(tns_obj_url, timeout=15, attempts=3, backoff_s=2)
+                                log(f"TNS object page: HTTP {rr.status_code} ({len(rr.content)} bytes)")
+                                if rr.status_code == 200:
+                                    m = _re.search(r'\b(\d{2,3}\.\d{4,})\s+([+-]\d{1,2}\.\d{4,})\b', rr.text)
+                                    if m:
+                                        target['ra'] = float(m.group(1))
+                                        target['dec'] = float(m.group(2))
+                                        log(f"TNS object page resolved: RA={target['ra']:.6f} DEC={target['dec']:.6f}")
+
+                                # --- Strategy 2: paginated public CSV (fallback) ---
+                                if 'ra' not in target:
+                                    for page in range(1, 6):
+                                        url = (
+                                            "https://www.wis-tns.org/search?"
+                                            "reported_within_last_value=365&reported_within_last_units=days&"
+                                            "num_page=500&public=1&format=csv&include_redshift=1&"
+                                            f"page={page}"
+                                        )
+                                        log(f"TNS page CSV: page={page} -> GET {url}")
+                                        rr = _get_with_retries(url, timeout=20, attempts=3, backoff_s=2)
+                                        log(f"TNS page CSV: HTTP {rr.status_code} ({len(rr.content)} bytes)")
+                                        if rr.status_code == 429:
+                                            log("TNS page CSV: rate limited, stopping")
+                                            break
+                                        if rr.status_code != 200 or len(rr.content) < 20:
+                                            continue
+                                        content = rr.content.lstrip(b"\xef\xbb\xbf").decode(errors="replace")
+                                        reader = csv.DictReader(io.StringIO(content))
+                                        rows_found = 0
+                                        for row in reader:
+                                            rows_found += 1
+                                            row_name = _norm(row.get("Name", ""))
+                                            if row_name in (_norm(target['name']), _norm(bare_name)):
+                                                ra_str, dec_str = row.get("RA"), row.get("DEC")
+                                                if ra_str and dec_str:
+                                                    from astropy.coordinates import SkyCoord
+                                                    c = SkyCoord(ra_str + " " + dec_str, unit=(u.hourangle, u.deg))
+                                                    target['ra'] = c.ra.deg
+                                                    target['dec'] = c.dec.deg
+                                                    log(f"TNS CSV matched (page {page}): RA={target['ra']:.6f} DEC={target['dec']:.6f}")
+                                                    break
+                                        if 'ra' in target or rows_found < 500:
+                                            break
+                                        _time.sleep(2)
+                            except Exception as e2:
+                                log(f"TNS lookup failed: {e2}")
+
+                if 'ra' in target and 'dec' in target:
                     if not len(config['targets']):
                         # Keep backwards-compatible primary target coordinates
                         config['target_ra'] = target['ra']
@@ -949,8 +1297,8 @@ def inspect_image(filename, config, verbose=True, show=False):
                     log(f"Resolved to RA={target['ra']:.4f} Dec={target['dec']:.4f}")
 
                     config['targets'].append(target)
-                except:
-                    log("Target not resolved")
+                else:
+                    log("Target name could not be resolved to coordinates")
 
         if (config.get('target_ra') or config.get('target_dec')) and wcs and wcs.is_celestial:
             if ra0 is not None and dec0 is not None and sr0 is not None:
@@ -1028,6 +1376,258 @@ def inspect_image(filename, config, verbose=True, show=False):
         log(f"MJD is {Time(config.get('time')).mjd}")
 
 
+def check_photometry_quality(basepath, config, m, target_obj, log=None):
+    """
+    Run QA checks on a just-completed forced photometry measurement and store
+    any warnings in config['photometry_warnings'].
+
+    Checks are filter-agnostic and work for any user/instrument:
+
+    1. Color-term anomaly: compare this task's color term against the
+       historical median for the same filter over the last 60 days.
+       A large shift in color term signals non-standard atmospheric
+       chromaticity (e.g. high airmass, thin clouds with wavelength-
+       dependent extinction).
+
+    2. Short-term light-curve consistency: compare the new measurement
+       against the linear trend extrapolated from the last 5 same-filter
+       measurements of the same target.  A large deviation flags a
+       potential bad measurement even when the photometric calibration
+       itself looks formally good.
+
+    3. Gaia broadband ordering (only when catalogue is gaiaedr3): for any
+       object with a positive SED, the G passband always collects more flux
+       than the narrower BP or RP passbands, so G must be at least as bright
+       as both.  G > BP or G < RP is physically impossible and signals either
+       a template subtraction artefact or an observing condition problem
+       specific to that exposure.
+    """
+    if log is None:
+        log = print
+
+    warnings = []
+
+    filt = config.get('filter')
+    cat_name = config.get('cat_name', '')
+    target_ra = config.get('target_ra')
+
+    current_term = m.get('color_term') if isinstance(m, dict) else None
+    current_mag = None
+    if len(target_obj) > 0 and 'mag_calib' in target_obj.colnames:
+        v = float(target_obj['mag_calib'][0])
+        current_mag = v if np.isfinite(v) else None
+
+    # Helper: read the best available calibrated magnitude from a task path
+    def _read_mag(task_path):
+        for fname in ('sub_target.vot', 'target.vot'):
+            p = os.path.join(task_path, fname)
+            if os.path.exists(p):
+                try:
+                    from astropy.table import Table as _Table
+                    tbl = _Table.read(p)
+                    if 'mag_calib' in tbl.colnames and len(tbl):
+                        ct = float(tbl['mag_color_term'][0]) if 'mag_color_term' in tbl.colnames else None
+                        mv = float(tbl['mag_calib'][0])
+                        return mv if np.isfinite(mv) else None, ct
+                except Exception:
+                    pass
+        return None, None
+
+    # ------------------------------------------------------------------ #
+    # Check 1 – color-term anomaly (any filter)                           #
+    # ------------------------------------------------------------------ #
+    if current_term is not None and filt:
+        try:
+            from django.apps import apps
+            Task = apps.get_model('stdweb', 'Task')
+            import datetime as _dt
+
+            cutoff = _dt.datetime.utcnow() - _dt.timedelta(days=60)
+            prev_tasks = (
+                Task.objects
+                .filter(config__filter=filt, created__gte=cutoff,
+                        state__in=['photometry_done', 'subtraction_done', 'done'])
+                .exclude(id=config.get('_task_id'))
+                .order_by('-created')[:300]
+            )
+
+            terms = []
+            for t in prev_tasks:
+                _, ct = _read_mag(t.path())
+                if ct is not None:
+                    terms.append(ct)
+
+            if len(terms) >= 5:
+                arr = np.array(terms)
+                hist_median = float(np.median(arr))
+                hist_mad = float(np.median(np.abs(arr - hist_median)))
+                threshold = max(0.08, 4.0 * hist_mad)
+                deviation = abs(current_term - hist_median)
+                if deviation > threshold:
+                    msg = (
+                        f"Color term anomaly ({filt} band): "
+                        f"current={current_term:.3f}, "
+                        f"historical median={hist_median:.3f} over {len(terms)} tasks "
+                        f"(|deviation|={deviation:.3f} > threshold={threshold:.3f}). "
+                        f"Possible non-standard atmospheric chromaticity."
+                    )
+                    log(f"Warning: {msg}")
+                    warnings.append({'level': 'warning', 'check': 'color_term', 'message': msg})
+        except Exception as e:
+            log(f"check_photometry_quality: color-term check skipped ({e})")
+
+    # ------------------------------------------------------------------ #
+    # Check 2 – short-term light-curve consistency (any filter)           #
+    # ------------------------------------------------------------------ #
+    if current_mag is not None and filt and target_ra is not None:
+        try:
+            from django.apps import apps
+            Task = apps.get_model('stdweb', 'Task')
+            from astropy.time import Time as _Time
+            import datetime as _dt
+
+            obs_time_str = config.get('time')
+            if obs_time_str:
+                obs_mjd = _Time(obs_time_str).mjd
+                cutoff = _dt.datetime.utcnow() - _dt.timedelta(days=14)
+                prev_tasks = (
+                    Task.objects
+                    .filter(config__filter=filt,
+                            config__target_ra=target_ra,
+                            created__gte=cutoff,
+                            state__in=['photometry_done', 'subtraction_done', 'done'])
+                    .exclude(id=config.get('_task_id'))
+                    .order_by('-created')[:20]
+                )
+
+                mjds, mags = [], []
+                for t in prev_tasks:
+                    t_obs_str = t.config.get('time')
+                    if not t_obs_str:
+                        continue
+                    try:
+                        t_mjd = _Time(t_obs_str).mjd
+                    except Exception:
+                        continue
+                    mv, _ = _read_mag(t.path())
+                    if mv is not None:
+                        mjds.append(t_mjd)
+                        mags.append(mv)
+
+                # Need at least 3 prior points to fit a trend
+                if len(mjds) >= 3:
+                    mjds_arr = np.array(mjds)
+                    mags_arr = np.array(mags)
+                    # Linear fit to recent points
+                    coeffs = np.polyfit(mjds_arr, mags_arr, 1)
+                    predicted = np.polyval(coeffs, obs_mjd)
+                    residuals = mags_arr - np.polyval(coeffs, mjds_arr)
+                    trend_rms = float(np.std(residuals))
+                    deviation = abs(current_mag - predicted)
+                    # Flag if deviation > max(5×trend_rms, 0.3 mag)
+                    threshold = max(5.0 * trend_rms, 0.3)
+                    if deviation > threshold:
+                        direction = "brighter" if current_mag < predicted else "fainter"
+                        msg = (
+                            f"Light-curve outlier ({filt} band): "
+                            f"measured={current_mag:.3f}, "
+                            f"trend prediction={predicted:.3f} "
+                            f"({direction} by {deviation:.3f} mag, "
+                            f"threshold={threshold:.3f} based on {len(mjds)} recent points, "
+                            f"trend_rms={trend_rms:.3f}). "
+                            f"Consider verifying image quality."
+                        )
+                        log(f"Warning: {msg}")
+                        warnings.append({'level': 'warning', 'check': 'lightcurve_trend', 'message': msg})
+        except Exception as e:
+            log(f"check_photometry_quality: light-curve trend check skipped ({e})")
+
+    # ------------------------------------------------------------------ #
+    # Check 3 – Gaia broadband ordering (only for gaiaedr3 catalogue)     #
+    # G passband spans the full BP+RP range, so G flux ≥ BP flux and      #
+    # G flux ≥ RP flux for any positive SED: G must be brighter than both.#
+    # This is true regardless of object colour or instrument.             #
+    # ------------------------------------------------------------------ #
+    is_gaia_g = (
+        current_mag is not None
+        and 'gaia' in cat_name.lower()
+        and config.get('cat_col_mag', '').lower() in ('gmag', 'g', 'g_mean_mag')
+    )
+    if is_gaia_g:
+        try:
+            from django.apps import apps
+            Task = apps.get_model('stdweb', 'Task')
+            from astropy.time import Time as _Time
+            import datetime as _dt
+
+            obs_time_str = config.get('time')
+            if obs_time_str and target_ra is not None:
+                obs_dt = _Time(obs_time_str).to_datetime()
+                # Find BP and RP sibling tasks for the same target (±4 h obs time)
+                sibling_tasks = (
+                    Task.objects
+                    .filter(
+                        config__target_ra=target_ra,
+                        config__cat_col_mag__in=['BPmag', 'RPmag', 'BP', 'RP',
+                                                  'phot_bp_mean_mag', 'phot_rp_mean_mag'],
+                        created__gte=obs_dt - _dt.timedelta(days=2),
+                        created__lte=obs_dt + _dt.timedelta(days=2),
+                        state__in=['photometry_done', 'subtraction_done', 'done'],
+                    )
+                )
+
+                bp_mag = rp_mag = None
+                for t in sibling_tasks:
+                    t_obs_str = t.config.get('time')
+                    if t_obs_str:
+                        try:
+                            t_obs = _Time(t_obs_str).to_datetime()
+                            if abs((t_obs - obs_dt).total_seconds()) > 4 * 3600:
+                                continue
+                        except Exception:
+                            pass
+                    col = t.config.get('cat_col_mag', '').lower()
+                    mv, _ = _read_mag(t.path())
+                    if mv is None:
+                        continue
+                    if col in ('bpmag', 'bp', 'phot_bp_mean_mag'):
+                        bp_mag = mv
+                    elif col in ('rpmag', 'rp', 'phot_rp_mean_mag'):
+                        rp_mag = mv
+
+                g_mag = current_mag
+                if bp_mag is not None and g_mag > bp_mag:
+                    delta = g_mag - bp_mag
+                    msg = (
+                        f"Gaia G is fainter than BP (physically impossible): "
+                        f"G={g_mag:.3f} > BP={bp_mag:.3f} (ΔG-BP={delta:+.3f} mag). "
+                        f"The G passband contains all BP wavelengths — this signals a "
+                        f"template subtraction residual or exposure-specific problem."
+                    )
+                    log(f"Warning: {msg}")
+                    warnings.append({'level': 'danger', 'check': 'gaia_G_vs_BP', 'message': msg})
+
+                if rp_mag is not None and g_mag < rp_mag:
+                    delta = rp_mag - g_mag
+                    msg = (
+                        f"Gaia G is brighter than RP (physically impossible): "
+                        f"G={g_mag:.3f} < RP={rp_mag:.3f} (ΔG-RP={-delta:+.3f} mag). "
+                        f"Check calibration or template subtraction."
+                    )
+                    log(f"Warning: {msg}")
+                    warnings.append({'level': 'danger', 'check': 'gaia_G_vs_RP', 'message': msg})
+
+        except Exception as e:
+            log(f"check_photometry_quality: Gaia ordering check skipped ({e})")
+
+    if warnings:
+        config['photometry_warnings'] = warnings
+        log(f"Photometry quality check: {len(warnings)} warning(s) raised.")
+    else:
+        config.pop('photometry_warnings', None)
+        log("Photometry quality check passed.")
+
+
 def photometry_image(filename, config, verbose=True, show=False):
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
@@ -1042,9 +1642,25 @@ def photometry_image(filename, config, verbose=True, show=False):
     # Mask
     mask = fits.getdata(os.path.join(basepath, 'mask.fits'), -1) > 0
 
+    # Guard against a stale mask.fits whose shape does not match the current image
+    # (e.g. leftover from a previous/foreign image in a reused task folder). Rather
+    # than crashing later in SExtractor, rebuild a basic mask from the image itself.
+    if mask.shape != image.shape:
+        log(f"Warning: mask.fits shape {mask.shape} does not match image {image.shape} — "
+            f"rebuilding mask from the image (NaN + saturation)")
+        mask = np.isnan(image)
+        if config.get('saturation'):
+            mask |= image >= config['saturation']
+        fits_write(os.path.join(basepath, 'mask.fits'), mask.astype(np.int8), compress=True)
+        log("Regenerated mask written to file:mask.fits")
+
     # Custom mask
     if os.path.exists(os.path.join(basepath, 'custom_mask.fits')):
         custom_mask = fits.getdata(os.path.join(basepath, 'custom_mask.fits'), -1) > 0
+        if custom_mask.shape != image.shape:
+            log(f"Warning: custom_mask.fits shape {custom_mask.shape} does not match image "
+                f"{image.shape} — ignoring stale custom mask")
+            custom_mask = None
     else:
         custom_mask = None
 
@@ -1054,6 +1670,31 @@ def photometry_image(filename, config, verbose=True, show=False):
     # Secondary targets - backward compatibility
     if not 'targets' in config and 'target_ra' in config and 'target_dec' in config:
         config['targets'] = [{'ra': config.get('target_ra'), 'dec': config.get('target_dec')}]
+
+    # Normalize config: replace None (from optional form fields) with safe defaults
+    _coerce_sn(config)
+    config['initial_aper'] = config.get('initial_aper') or 3
+    config['initial_r0'] = config.get('initial_r0') if config.get('initial_r0') is not None else 0
+    config['rel_aper'] = config.get('rel_aper') or 1
+    config['rel_bg1'] = config.get('rel_bg1') or 5
+    config['rel_bg2'] = config.get('rel_bg2') or 7
+    config['spatial_order'] = config.get('spatial_order') if config.get('spatial_order') is not None else 2
+    config['minarea'] = config.get('minarea') or 5
+    config['use_color'] = config.get('use_color') if config.get('use_color') is not None else True
+    config['blend_radius'] = config.get('blend_radius') if config.get('blend_radius') is not None else 2.0
+    config['refine_wcs'] = config.get('refine_wcs') if config.get('refine_wcs') is not None else True
+    config['blind_match_wcs'] = config.get('blind_match_wcs') if config.get('blind_match_wcs') is not None else False
+    if config.get('blind_match_ps_lo') is None:
+        config['blind_match_ps_lo'] = 0.2
+    if config.get('blind_match_ps_up') is None:
+        config['blind_match_ps_up'] = 4.0
+    if config.get('blind_match_sr0') is None:
+        config['blind_match_sr0'] = 1.0
+    config['hotpants_extra'] = config.get('hotpants_extra') or {'ko':0, 'bgo':0}
+    config['sub_size'] = config.get('sub_size') or 1000
+    config['sub_overlap'] = config.get('sub_overlap') if config.get('sub_overlap') is not None else 50
+    config['sub_verbose'] = config.get('sub_verbose') if config.get('sub_verbose') is not None else False
+    config['subtraction_mode'] = config.get('subtraction_mode') or 'detection'
 
     # Cleanup stale plots
     cleanup_paths(cleanup_photometry, basepath=basepath)
@@ -1114,7 +1755,8 @@ def photometry_image(filename, config, verbose=True, show=False):
 
     log("\n---- Object measurement ----\n")
 
-    # FWHM
+    # FWHM star selection
+    # Start with "ideal" selection: no SExtractor flags + S/N > 20 + pre-filter
     idx = obj['flags'] == 0
     idx &= obj['magerr'] < 1/20
 
@@ -1126,7 +1768,36 @@ def photometry_image(filename, config, verbose=True, show=False):
         obj['flags'][~fidx] |= 0x800
 
     if not len(obj[idx]):
-        raise RuntimeError("No suitable stars with S/N > 20 in the image!")
+        # Diagnose and try progressively relaxed selections
+        n_clean   = np.sum(obj['flags'] == 0)
+        n_sn20    = np.sum(obj['magerr'] < 1/20)
+        n_prefilt = np.sum((obj['flags'] & 0x800) == 0) if config.get('prefilter_detections', True) else len(obj)
+        log(f"Warning: strict FWHM selection empty (flags==0: {n_clean}, S/N>20: {n_sn20}, prefilter ok: {n_prefilt})")
+        log("Trying relaxed star selection for FWHM estimation…")
+
+        # Relaxation 1: allow SExtractor flags (deblended, etc.) but keep pre-filter + any S/N
+        idx = (obj['flags'] & 0x800) == 0   # only exclude pre-filter outliers
+        idx &= obj['magerr'] < 1/20
+
+        if not len(obj[idx]):
+            # Relaxation 2: drop S/N > 20 — use best 20% by S/N among pre-filter survivors
+            idx = (obj['flags'] & 0x800) == 0
+            if len(obj[idx]):
+                magerr_threshold = np.percentile(obj['magerr'][idx], 20)
+                idx &= obj['magerr'] <= magerr_threshold
+                log(f"Relaxation 2: using top-20%% S/N stars (magerr ≤ {magerr_threshold:.3f}, "
+                    f"i.e. S/N ≥ {1/magerr_threshold:.1f})")
+
+        if not len(obj[idx]):
+            raise RuntimeError(
+                f"No suitable stars for FWHM estimation. "
+                f"Detected {len(obj)} objects; {n_clean} have no SExtractor flags; "
+                f"{n_sn20} have S/N > 20. "
+                f"Check gain value ({config.get('gain')}) and saturation level ({config.get('saturation'):.0f}). "
+                f"Image sky median={np.nanmedian(image):.0f} ADU, max={np.nanmax(image):.0f} ADU."
+            )
+        else:
+            log(f"Using {np.sum(idx)} stars for FWHM after relaxed selection.")
 
     fwhm_values = 2.0*obj['FLUX_RADIUS'] # obj['fwhm']
 
@@ -1428,40 +2099,91 @@ def photometry_image(filename, config, verbose=True, show=False):
             (not config.get('cat_col_color_mag2') or config['cat_col_color_mag2'] in cat.colnames)):
         raise RuntimeError('Catalogue does not have required magnitudes')
 
-    # Astrometric refinement
+    # Astrometric refinement. SCAMP (order 3) can return a "successful"
+    # degenerate TPV that is much worse than a good header SIP WCS — keep
+    # the original when that happens, and skip SCAMP when the original
+    # already matches the catalogue tightly.
     if config.get('refine_wcs', False):
         log("\n---- Astrometric refinement ----\n")
 
-        # Exclude pre-filtered detections and limit list size
-        obj_ast = obj[(obj['flags'] & 0x800) == 0]
+        cat_col_ra, cat_col_dec = guess_catalogue_radec_columns(cat_filtered)
+        sr_ast = fwhm * pixscale
+        n_cur, med_cur = _wcs_match_count(
+            obj, cat_filtered, wcs, sr_ast, cat_col_ra, cat_col_dec
+        )
+        log(f"Current WCS: {_fmt_match_stats(n_cur, med_cur)} within {sr_ast * 3600:.1f} arcsec")
 
-        # FIXME: make the order configurable
-        wcs1 = pipeline.refine_astrometry(obj_ast, cat_filtered, fwhm*pixscale,
-                                          wcs=wcs, order=3, method='scamp',
-                                          cat_col_mag=config.get('cat_col_mag'),
-                                          cat_col_mag_err=config.get('cat_col_mag_err'),
-                                          verbose=verbose,
-                                          _tmpdir=settings.STDPIPE_TMPDIR,
-                                          _exe=settings.STDPIPE_SCAMP)
-        if wcs1 is None or not wcs1.is_celestial:
-            raise RuntimeError('WCS refinement failed')
+        wcs_fits = None
+        try:
+            wcs_fits = WCS(fits.getheader(filename, -1), naxis=2)
+        except Exception:
+            wcs_fits = None
+        n_fits, med_fits = _wcs_match_count(
+            obj, cat_filtered, wcs_fits, sr_ast, cat_col_ra, cat_col_dec
+        )
+        if wcs_fits is not None and getattr(wcs_fits, 'is_celestial', False):
+            log(f"FITS header WCS: {_fmt_match_stats(n_fits, med_fits)} within {sr_ast * 3600:.1f} arcsec")
+            header_better = n_fits > n_cur and (
+                n_cur < 15 or n_fits >= 2 * max(n_cur, 1)
+            )
+            if header_better:
+                log("FITS header WCS matches the catalogue better — using it as baseline")
+                wcs = wcs_fits
+                n_cur, med_cur = n_fits, med_fits
+                obj['ra'], obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+
+        skip_scamp = n_cur >= 30 and med_cur is not None and med_cur < 0.5
+        wcs1 = None
+        if skip_scamp:
+            log("Original WCS already has a dense, tight catalogue match — "
+                "skipping SCAMP to avoid a degenerate re-fit")
         else:
-            wcs = wcs1
-            obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
-            astrometry.store_wcs(os.path.join(basepath, "image.wcs"), wcs)
-            astrometry.clear_wcs(header)
-            header += wcs.to_header(relax=True)
-            config['refine_wcs'] = False
-            log("Refined WCS stored to file:image.wcs")
-
-            # Save field centre of the (possibly refined) WCS for API consumers
-            if wcs and wcs.is_celestial:
-                ra_cen, dec_cen, sr_cen = astrometry.get_frame_center(
-                    wcs=wcs, width=image.shape[1], height=image.shape[0]
+            obj_ast = obj[(obj['flags'] & 0x800) == 0]
+            wcs1 = pipeline.refine_astrometry(
+                obj_ast, cat_filtered, sr_ast,
+                wcs=wcs, order=3, method='scamp',
+                cat_col_mag=config.get('cat_col_mag'),
+                cat_col_mag_err=config.get('cat_col_mag_err'),
+                verbose=verbose,
+                _tmpdir=settings.STDPIPE_TMPDIR,
+                _exe=settings.STDPIPE_SCAMP,
+            )
+            if wcs1 is None or not getattr(wcs1, 'is_celestial', False):
+                log("Warning: WCS refinement failed (SCAMP chi2 too high or no convergence). "
+                    "Continuing with existing WCS.")
+                wcs1 = None
+            else:
+                n_new, med_new = _wcs_match_count(
+                    obj, cat_filtered, wcs1, sr_ast, cat_col_ra, cat_col_dec
                 )
-                config['field_ra'] = float(ra_cen)
-                config['field_dec'] = float(dec_cen)
-                config['field_sr'] = float(sr_cen)
+                log(f"SCAMP WCS: {_fmt_match_stats(n_new, med_new)} within {sr_ast * 3600:.1f} arcsec")
+                degenerate = n_new < 15 or (n_cur >= 15 and n_new < 0.5 * n_cur)
+                if degenerate:
+                    log("Warning: SCAMP solution is degenerate or worse than the original WCS — keeping the original")
+                    wcs1 = None
+
+        if wcs1 is not None:
+            wcs = wcs1
+            log("Refined WCS stored to file:image.wcs")
+        else:
+            wcs = _wcs_as_tpv(
+                wcs, obj=obj, cat=cat_filtered, sr_deg=sr_ast,
+                cat_col_ra=cat_col_ra, cat_col_dec=cat_col_dec, log=log,
+            )
+            log("Original WCS kept (stored to file:image.wcs)")
+
+        obj['ra'], obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+        astrometry.store_wcs(os.path.join(basepath, "image.wcs"), wcs)
+        astrometry.clear_wcs(header)
+        header += wcs.to_header(relax=True)
+        config['refine_wcs'] = False
+        if wcs and wcs.is_celestial:
+            ra_cen, dec_cen, sr_cen = astrometry.get_frame_center(
+                wcs=wcs, width=image.shape[1], height=image.shape[0]
+            )
+            config['field_ra'] = float(ra_cen)
+            config['field_dec'] = float(dec_cen)
+            config['field_sr'] = float(sr_cen)
 
     log("\n---- Photometric calibration ----\n")
 
@@ -1511,52 +2233,57 @@ def photometry_image(filename, config, verbose=True, show=False):
     pickle_to_file(os.path.join(basepath, 'photometry.pickle'), m)
     log("Photometric solution stored to photometry.pickle")
 
-    # Plot photometric solution
-    with plots.figure_saver(os.path.join(basepath, 'photometry.png'), figsize=(8, 6), show=show) as fig:
-        ax = fig.add_subplot(2, 1, 1)
-        plots.plot_photometric_match(m, mode='mag', ax=ax)
-        ax = fig.add_subplot(2, 1, 2)
-        plots.plot_photometric_match(m, mode='color', ax=ax)
+    # Plot photometric solution.
+    # Matplotlib may occasionally fail inside celery worker shutdown/signal handlers
+    # (e.g. billiard SystemExit). Do not fail the full photometry task for diagnostics.
+    def _run_plot(plot_name, draw_fn, figsize=(8, 6)):
+        try:
+            with plots.figure_saver(os.path.join(basepath, plot_name), figsize=figsize, show=show) as fig:
+                draw_fn(fig)
+        except BaseException as e:
+            log(f"Warning: failed to generate {plot_name}: {type(e).__name__}: {e}")
 
-    with plots.figure_saver(os.path.join(basepath, 'photometry_unmasked.png'), figsize=(8, 6), show=show) as fig:
-        ax = fig.add_subplot(2, 1, 1)
-        plots.plot_photometric_match(m, mode='mag', show_masked=False, ax=ax)
-        ax.set_ylim(-0.4, 0.4)
-        ax = fig.add_subplot(2, 1, 2)
-        plots.plot_photometric_match(m, mode='color', show_masked=False, ax=ax)
-        ax.set_ylim(-0.4, 0.4)
+    _run_plot('photometry.png', lambda fig: (
+        (lambda ax: plots.plot_photometric_match(m, mode='mag', ax=ax))(fig.add_subplot(2, 1, 1)),
+        (lambda ax: plots.plot_photometric_match(m, mode='color', ax=ax))(fig.add_subplot(2, 1, 2))
+    ))
 
-    with plots.figure_saver(os.path.join(basepath, 'photometry_zeropoint.png'), figsize=(8, 6), show=show) as fig:
-        ax = fig.add_subplot(1, 1, 1)
-        plots.plot_photometric_match(m, mode='zero', show_dots=True, bins=8, ax=ax,
-                                     range=[[0, image.shape[1]], [0, image.shape[0]]])
-        ax.set_aspect(1)
-        ax.set_xlim(0, image.shape[1])
-        ax.set_ylim(0, image.shape[0])
+    _run_plot('photometry_unmasked.png', lambda fig: (
+        (lambda ax: (plots.plot_photometric_match(m, mode='mag', show_masked=False, ax=ax), ax.set_ylim(-0.4, 0.4)))(fig.add_subplot(2, 1, 1)),
+        (lambda ax: (plots.plot_photometric_match(m, mode='color', show_masked=False, ax=ax), ax.set_ylim(-0.4, 0.4)))(fig.add_subplot(2, 1, 2))
+    ))
 
-    with plots.figure_saver(os.path.join(basepath, 'photometry_model.png'), figsize=(8, 6), show=show) as fig:
-        ax = fig.add_subplot(1, 1, 1)
-        plots.plot_photometric_match(m, mode='model', show_dots=True, bins=8, ax=ax,
-                                     range=[[0, image.shape[1]], [0, image.shape[0]]])
-        ax.set_aspect(1)
-        ax.set_xlim(0, image.shape[1])
-        ax.set_ylim(0, image.shape[0])
+    _run_plot('photometry_zeropoint.png', lambda fig: (
+        (lambda ax: (
+            plots.plot_photometric_match(m, mode='zero', show_dots=True, bins=8, ax=ax,
+                                         range=[[0, image.shape[1]], [0, image.shape[0]]]),
+            ax.set_aspect(1), ax.set_xlim(0, image.shape[1]), ax.set_ylim(0, image.shape[0])
+        ))(fig.add_subplot(1, 1, 1))
+    ))
 
-    with plots.figure_saver(os.path.join(basepath, 'photometry_residuals.png'), figsize=(8, 6), show=show) as fig:
-        ax = fig.add_subplot(1, 1, 1)
-        plots.plot_photometric_match(m, mode='residuals', show_dots=True, bins=8, ax=ax,
-                                     range=[[0, image.shape[1]], [0, image.shape[0]]])
-        ax.set_aspect(1)
-        ax.set_xlim(0, image.shape[1])
-        ax.set_ylim(0, image.shape[0])
+    _run_plot('photometry_model.png', lambda fig: (
+        (lambda ax: (
+            plots.plot_photometric_match(m, mode='model', show_dots=True, bins=8, ax=ax,
+                                         range=[[0, image.shape[1]], [0, image.shape[0]]]),
+            ax.set_aspect(1), ax.set_xlim(0, image.shape[1]), ax.set_ylim(0, image.shape[0])
+        ))(fig.add_subplot(1, 1, 1))
+    ))
 
-    with plots.figure_saver(os.path.join(basepath, 'astrometry_dist.png'), figsize=(8, 6), show=show) as fig:
-        ax = fig.add_subplot(1, 1, 1)
-        plots.plot_photometric_match(m, mode='dist', show_dots=True, bins=8, ax=ax,
-                                     range=[[0, image.shape[1]], [0, image.shape[0]]])
-        ax.set_aspect(1)
-        ax.set_xlim(0, image.shape[1])
-        ax.set_ylim(0, image.shape[0])
+    _run_plot('photometry_residuals.png', lambda fig: (
+        (lambda ax: (
+            plots.plot_photometric_match(m, mode='residuals', show_dots=True, bins=8, ax=ax,
+                                         range=[[0, image.shape[1]], [0, image.shape[0]]]),
+            ax.set_aspect(1), ax.set_xlim(0, image.shape[1]), ax.set_ylim(0, image.shape[0])
+        ))(fig.add_subplot(1, 1, 1))
+    ))
+
+    _run_plot('astrometry_dist.png', lambda fig: (
+        (lambda ax: (
+            plots.plot_photometric_match(m, mode='dist', show_dots=True, bins=8, ax=ax,
+                                         range=[[0, image.shape[1]], [0, image.shape[0]]]),
+            ax.set_aspect(1), ax.set_xlim(0, image.shape[1]), ax.set_ylim(0, image.shape[0])
+        ))(fig.add_subplot(1, 1, 1))
+    ))
 
     # Apply photometry to objects
     # (It should already be done in calibrate_photometry(), but let's be verbose
@@ -1608,12 +2335,15 @@ def photometry_image(filename, config, verbose=True, show=False):
     if config.get('sn', 5) not in sns:
         sns.append(config.get('sn', 5))
     for sn in sns:
-        # Just print the value
         mag0 = pipeline.get_detection_limit(obj, sn=sn, verbose=False)
-        log(f"Detection limit at S/N={sn:.0f} level is {mag0:.2f}")
+        if mag0 is not None:
+            log(f"Detection limit at S/N={sn:.0f} level is {mag0:.2f}")
+        else:
+            log(f"Detection limit at S/N={sn:.0f} level could not be computed",)
 
     mag0 = pipeline.get_detection_limit(obj, sn=config.get('sn'), verbose=False)
-    config['mag_limit'] = mag0
+    # Store result only if available
+    config['mag_limit'] = mag0 if mag0 is not None else np.nan
 
     if 'bg_fluxerr' in obj.colnames and np.any(obj['bg_fluxerr'] > 0):
         fluxerr = obj['bg_fluxerr']
@@ -1642,7 +2372,34 @@ def photometry_image(filename, config, verbose=True, show=False):
             'ra': [_['ra'] for _ in config['targets']],
             'dec': [_['dec'] for _ in config['targets']]
         })
-        target_obj['x'],target_obj['y'] = wcs.all_world2pix(target_obj['ra'], target_obj['dec'], 0)
+
+        # Pre-check: ensure the primary target is within the image field before
+        # calling all_world2pix — a target far outside the field causes the WCS
+        # SIP distortion solver to fail to converge with a cryptic error.
+        field_ra  = config.get('field_ra',  wcs.wcs.crval[0])
+        field_dec = config.get('field_dec', wcs.wcs.crval[1])
+        field_sr  = config.get('field_sr',  0.5)
+        from astropy.coordinates import SkyCoord
+        import astropy.units as u
+        field_center  = SkyCoord(field_ra, field_dec, unit='deg')
+        primary_coord = SkyCoord(target_obj['ra'][0], target_obj['dec'][0], unit='deg')
+        separation_deg = field_center.separation(primary_coord).deg
+        if separation_deg > field_sr * 2:
+            raise RuntimeError(
+                f"Primary target ({target_obj['ra'][0]:.4f}, {target_obj['dec'][0]:.4f}) "
+                f"is {separation_deg:.2f}° away from the image center "
+                f"({field_ra:.4f}, {field_dec:.4f}) — image field radius is only "
+                f"{field_sr:.3f}°. Please check that the correct image was uploaded "
+                f"and that the target coordinates match the field."
+            )
+
+        try:
+            target_obj['x'],target_obj['y'] = wcs.all_world2pix(target_obj['ra'], target_obj['dec'], 0)
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not project target ({target_obj['ra'][0]:.4f}, {target_obj['dec'][0]:.4f}) "
+                f"onto image WCS (field center {field_ra:.4f}, {field_dec:.4f}): {e}"
+            ) from e
 
         # Filter out targets outside the image so that photometry routine does not crash
         def is_inside(x, y):
@@ -1682,7 +2439,11 @@ def photometry_image(filename, config, verbose=True, show=False):
             fluxerr = target_obj['bg_fluxerr']
         else:
             fluxerr = target_obj['fluxerr']
-        target_obj['mag_limit'] = -2.5*np.log10(config.get('sn', 5)*fluxerr) + m['zero_fn'](target_obj['x'], target_obj['y'], target_obj['mag'])
+        target_obj['mag_limit'] = -2.5*np.log10(config.get('sn', 5)*fluxerr) + m['zero_fn'](
+            target_obj['x'],
+            target_obj['y'],
+            target_obj['mag']
+        )
 
         target_obj['mag_filter_name'] = m['cat_col_mag']
 
@@ -1692,6 +2453,9 @@ def photometry_image(filename, config, verbose=True, show=False):
 
         target_obj.write(os.path.join(basepath, 'target.vot'), format='votable', overwrite=True)
         log("Measured targets stored to file:target.vot")
+
+        # Quality checks on photometry result
+        check_photometry_quality(basepath, config, m, target_obj, log=log)
 
         # Create the cutouts from image based on the targets
         for i,tobj in enumerate(target_obj):
@@ -1774,8 +2538,8 @@ def transients_simple_image(filename, config, verbose=True, show=False):
     obj = Table.read(os.path.join(basepath, 'objects.vot'))
     log(f"{len(obj)} objects loaded from file:objects.vot")
 
-    # Catalogue
-    # cat = Table.read(os.path.join(basepath, 'cat.vot'))
+    # Reference catalogue from photometric calibration
+    cat = Table.read(os.path.join(basepath, 'cat.vot'))
 
     # WCS
     wcs = get_wcs(filename, header=header, verbose=verbose)
@@ -1869,6 +2633,94 @@ def transients_simple_image(filename, config, verbose=True, show=False):
 
         return xidx
 
+    def rank_simple_candidates(xcand, xobj):
+        # Rank candidates by a mixed score robust against bright artefacts:
+        # S/N + morphology consistency with field stars + lightweight flag penalties.
+        if len(xcand) == 0:
+            return xcand
+
+        score = np.zeros(len(xcand), dtype=np.float64)
+
+        if 'flux' in xcand.colnames and 'fluxerr' in xcand.colnames:
+            flux = np.array(xcand['flux'], dtype=np.float64)
+            fluxerr = np.array(xcand['fluxerr'], dtype=np.float64)
+            sn = flux / np.maximum(fluxerr, 1e-9)
+            score += np.log10(1 + np.clip(sn, 0, None))
+
+        if 'mag_calib' in xcand.colnames:
+            mag = np.array(xcand['mag_calib'], dtype=np.float64)
+            mag0 = np.nanmedian(mag)
+            # Keep brightness contribution weak to avoid over-prioritizing saturated artefacts.
+            score += 0.2*np.clip((mag0 - mag)/2.0, -2, 2)
+
+        if 'fwhm' in xcand.colnames and 'fwhm' in xobj.colnames:
+            ref_fwhm = np.array(xobj['fwhm'], dtype=np.float64)
+            if 'flags' in xobj.colnames:
+                ref_idx = np.array(xobj['flags']) == 0
+            else:
+                ref_idx = np.ones(len(xobj), dtype=bool)
+
+            ref = ref_fwhm[ref_idx]
+            ref = ref[np.isfinite(ref) & (ref > 0)]
+
+            if len(ref) >= 10:
+                ref_med = np.nanmedian(ref)
+                ref_sigma = max(0.3, 0.5*(np.nanpercentile(ref, 84) - np.nanpercentile(ref, 16)))
+                cfwhm = np.array(xcand['fwhm'], dtype=np.float64)
+                score += 2.5*np.exp(-0.5*((cfwhm - ref_med)/ref_sigma)**2)
+                # Reject extremely sharp detections often associated with hot pixels/cosmics.
+                score -= 0.8*(cfwhm < 0.6*ref_med)
+
+        if 'flags' in xcand.colnames:
+            flags = np.array(xcand['flags'])
+            # Keep deblended sources but with a mild penalty.
+            score -= 0.2*((flags & 0x02) > 0)
+            # Strongly penalize suspicious flags beyond deblended/isophotal masked bits.
+            score -= 1.0*((flags & (0x7fff - 0x0100 - 0x02)) > 0)
+
+        xcand = xcand.copy()
+        xcand['transient_score'] = score
+        xcand.sort('transient_score', reverse=True)
+
+        log("Simple candidates ranked by transient_score (S/N + morphology + flags)")
+
+        return xcand
+
+    # Local catalogue pre-filter fallback.
+    # This avoids relying solely on external CDS XMatch availability in crowded fields.
+    if len(obj):
+        cat_col_ra, cat_col_dec = guess_catalogue_radec_columns(cat)
+        if cat_col_ra is None:
+            log("Cannot guess local catalogue coordinate columns, skipping local pre-filter")
+        else:
+            sr_match = 0.5 * fwhm * pixscale
+            oidx, cidx, _ = astrometry.spherical_match(
+                obj['ra'], obj['dec'],
+                cat[cat_col_ra], cat[cat_col_dec],
+                sr_match
+            )
+
+            if len(oidx):
+                remove_idx = oidx
+                if config.get('simple_mag_diff'):
+                    # Keep only matches that are not significantly brighter than catalogue.
+                    # This mirrors checker_fn logic used for remote catalogue cross-matches.
+                    cat_col_mag = config.get('cat_col_mag')
+                    if cat_col_mag in cat.colnames and 'mag_calib' in obj.colnames:
+                        diff = obj['mag_calib'][oidx] - cat[cat_col_mag][cidx]
+                        if len(diff[np.isfinite(diff)]) > 10:
+                            diff -= np.nanmedian(diff)
+                        keep_match = diff > -config.get('simple_mag_diff', 2.0)
+                        remove_idx = oidx[keep_match]
+                    else:
+                        log("Local catalogue pre-filter: magnitude columns missing, using positional-only match")
+
+                if len(remove_idx):
+                    keep = np.ones(len(obj), dtype=bool)
+                    keep[remove_idx] = False
+                    obj = obj[keep]
+                    log(f"{len(obj)} remains after matching with local reference catalogue")
+
     candidates = pipeline.filter_transient_candidates(
         obj,
         sr=0.5*fwhm*pixscale,
@@ -1895,7 +2747,9 @@ def transients_simple_image(filename, config, verbose=True, show=False):
             verbose=verbose
         )
 
-    # Restrict to 100 brightest ones if there are too many
+    candidates = rank_simple_candidates(candidates, obj)
+
+    # Restrict to 100 highest-ranked ones if there are too many
     if len(candidates) > 100:
         candidates = candidates[:100]
         log(f"Warning: too many candidates, limiting to first {len(candidates)}")
@@ -1952,6 +2806,7 @@ def transients_simple_image(filename, config, verbose=True, show=False):
         log("No candidates found")
 
 
+
 def subtract_image(filename, config, verbose=True, show=False):
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
@@ -1965,8 +2820,21 @@ def subtract_image(filename, config, verbose=True, show=False):
         _cachedir = os.path.join(basepath, 'cache')
 
     sub_verbose = verbose if config.get('sub_verbose') else False
-    subtraction_mode = config.get('subtraction_mode', 'detection')
-    subtraction_method = config.get('subtraction_method', 'hotpants')
+    subtraction_mode = config.get('subtraction_mode') or 'detection'
+    subtraction_method = config.get('subtraction_method') or 'hotpants'
+
+    # Normalize config: replace None (from optional form fields) with safe defaults
+    _coerce_sn(config)
+    config['initial_aper'] = config.get('initial_aper') or 3
+    config['initial_r0'] = config.get('initial_r0') if config.get('initial_r0') is not None else 0
+    config['rel_aper'] = config.get('rel_aper') or 1
+    config['rel_bg1'] = config.get('rel_bg1') or 5
+    config['rel_bg2'] = config.get('rel_bg2') or 7
+    config['spatial_order'] = config.get('spatial_order') if config.get('spatial_order') is not None else 2
+    config['minarea'] = config.get('minarea') or 5
+    config['hotpants_extra'] = config.get('hotpants_extra') or {'ko':0, 'bgo':0}
+    config['sub_size'] = config.get('sub_size') or 1000
+    config['sub_overlap'] = config.get('sub_overlap') if config.get('sub_overlap') is not None else 50
 
     # Cleanup stale plots and files
     cleanup_paths(cleanup_subtraction, basepath=basepath)
@@ -2032,7 +2900,38 @@ def subtract_image(filename, config, verbose=True, show=False):
 
         template_gain = 10000 # Assume effectively noise-less
 
-        log(f"Using {tconf['name']} in filter {tfilter} as a template")
+        # Allow manual override of template filter band
+        tfilter_override = config.get('template_filter')
+        if tfilter_override and tfilter_override in tconf.get('filters', {}):
+            tfilter = tfilter_override
+            log(f"Using {tconf['name']} in filter {tfilter} as a template (manual override)")
+        else:
+            log(f"Using {tconf['name']} in filter {tfilter} as a template")
+
+        # Quick coverage check before heavy processing
+        ra_c, dec_c, _ = astrometry.get_frame_center(wcs=wcs, width=image.shape[1], height=image.shape[0])
+        if tname in ('ps1', 'ls'):
+            check_fn = templates.point_in_ps1 if tname == 'ps1' else templates.point_in_ls
+            if not check_fn(ra_c, dec_c):
+                raise RuntimeError(
+                    f"No {tconf['name']} coverage at RA={ra_c:.3f} Dec={dec_c:.3f} — "
+                    f"try a different survey"
+                )
+        elif tname != 'custom' and isinstance(tconf.get('filters'), dict):
+            hips_id = tconf['filters'].get(tfilter)
+            if hips_id:
+                log(f"Checking {tconf['name']} {tfilter}-band coverage...")
+                probe = templates.get_hips_image(
+                    hips_id, ra=ra_c, dec=dec_c,
+                    width=64, height=64, fov=pixscale * 200,
+                    get_header=False, normalize=False, verbose=False
+                )
+                if probe is None or not np.any(np.isfinite(probe)):
+                    raise RuntimeError(
+                        f"No {tconf['name']} {tfilter}-band coverage at "
+                        f"RA={ra_c:.3f} Dec={dec_c:.3f} — try a different survey or band"
+                    )
+                log(f"Coverage confirmed")
 
     sub_size = config.get('sub_size', 1000)
     sub_overlap = config.get('sub_overlap', 50)
@@ -2106,39 +3005,48 @@ def subtract_image(filename, config, verbose=True, show=False):
                 _tmpdir=settings.STDPIPE_TMPDIR,
                 _exe=settings.STDPIPE_SWARP,
                 verbose=sub_verbose)
-            if tmask is not None and tmpl is not None:
-                if tname == 'ps1':
-                    tmask = tmask > 0
-                elif tname == 'ls':
-                    # Bitmask for a given band, as described at https://www.legacysurvey.org/dr10/bitmasks/
-                    imask = 0x0000
-                    imask |= 0x0001 # not primary brick area
-                    # imask |= 0x0002 # bright star nearby
-                    # imask |= 0x0100 # WISE W1 (all masks)
-                    # imask |= 0x0200 # WISE W2 (all masks)
-                    imask |= 0x0400 # Bailed out processing
-                    # imask |= 0x0800 # medium-bright star
-                    # imask |= 0x1000 # SGA large galaxy
-                    # imask |= 0x2000 # Globular cluster
+            if tmask is None or tmpl is None:
+                log(f"Warning: no template coverage from {tconf['name']} for sub-image {i} "
+                    f"({x0},{y0})-({x0+image1.shape[1]},{y0+image1.shape[0]}) — skipping")
+                continue
 
-                    if tfilter == 'g':
-                        imask |= 0x0004 # g band saturated
-                        imask |= 0x0020 # any ALLMASK_G bit set
-                    elif tfilter == 'r':
-                        imask |= 0x0008 # r band saturated
-                        imask |= 0x0040 # any ALLMASK_R bit set
-                    elif tfilter == 'i':
-                        imask |= 0x4000 # i band saturated
-                        imask |= 0x8000 # any ALLMASK_I bit set
-                    elif tfilter == 'z':
-                        imask |= 0x0010 # z band saturated
-                        imask |= 0x0080 # any ALLMASK_Z bit set
+            if tname == 'ps1':
+                tmask = tmask > 0
+            elif tname == 'ls':
+                # Bitmask for a given band, as described at https://www.legacysurvey.org/dr10/bitmasks/
+                imask = 0x0000
+                imask |= 0x0001 # not primary brick area
+                # imask |= 0x0002 # bright star nearby
+                # imask |= 0x0100 # WISE W1 (all masks)
+                # imask |= 0x0200 # WISE W2 (all masks)
+                imask |= 0x0400 # Bailed out processing
+                # imask |= 0x0800 # medium-bright star
+                # imask |= 0x1000 # SGA large galaxy
+                # imask |= 0x2000 # Globular cluster
 
-                    tmask = (tmask & imask) > 0
+                if tfilter == 'g':
+                    imask |= 0x0004 # g band saturated
+                    imask |= 0x0020 # any ALLMASK_G bit set
+                elif tfilter == 'r':
+                    imask |= 0x0008 # r band saturated
+                    imask |= 0x0040 # any ALLMASK_R bit set
+                elif tfilter == 'i':
+                    imask |= 0x4000 # i band saturated
+                    imask |= 0x8000 # any ALLMASK_I bit set
+                elif tfilter == 'z':
+                    imask |= 0x0010 # z band saturated
+                    imask |= 0x0080 # any ALLMASK_Z bit set
 
-                tmask |= np.isnan(tmpl)
-            else:
-                raise RuntimeError(f"Error getting the template from {tconf['name']}")
+                tmask = (tmask & imask) > 0
+
+            tmask |= np.isnan(tmpl)
+
+            # Check that the template has enough valid (non-NaN) pixels to be usable
+            valid_frac = np.mean(~tmask)
+            if valid_frac < 0.1:
+                log(f"Warning: template from {tconf['name']} for sub-image {i} has only "
+                    f"{valid_frac:.1%} valid pixels — field likely not covered by this survey, skipping")
+                continue
 
         elif tname == 'custom':
             log("Re-projecting custom template onto sub-image")
@@ -2154,10 +3062,14 @@ def subtract_image(filename, config, verbose=True, show=False):
             tmpl = templates.get_hips_image(tconf['filters'][tfilter], wcs=wcs1, shape=image1.shape,
                                             get_header=False,
                                             verbose=sub_verbose)
-            if tmpl is not None:
-                tmask = np.isnan(tmpl)
-            else:
-                raise RuntimeError(f"Error getting the template from {tconf['name']}")
+            if tmpl is None:
+                log(f"Warning: no template coverage from {tconf['name']} for sub-image {i} "
+                    f"({x0},{y0})-({x0+image1.shape[1]},{y0+image1.shape[0]}) — skipping")
+                continue
+            tmask = np.isnan(tmpl)
+            if np.all(tmask):
+                log(f"Warning: template from {tconf['name']} ({tfilter}-band) is all NaN for sub-image {i} — no coverage, skipping")
+                continue
 
         # Estimate template FWHM
         tobj,tsegm = photometry.get_objects_sextractor(
@@ -2354,6 +3266,9 @@ def subtract_image(filename, config, verbose=True, show=False):
             target_obj.write(os.path.join(basepath, 'sub_target.vot'), format='votable', overwrite=True)
             log("Measured target stored to file:sub_target.vot")
 
+            # Quality checks on subtraction photometry result
+            check_photometry_quality(basepath, config, m, target_obj, log=log)
+
             # Create the cutout from image based on the candidate
             cutout = cutouts.get_cutout(
                 image1, target_obj[0], 30,
@@ -2437,6 +3352,10 @@ def subtract_image(filename, config, verbose=True, show=False):
                 gain=config.get('gain', 1.0),
                 verbose=sub_verbose
             )
+
+            # Ensure flags are 32-bit ints to avoid OverflowError during bitmask operations
+            if 'flags' in sobj.colnames and sobj['flags'].dtype != np.int32:
+                sobj['flags'] = sobj['flags'].astype(np.int32)
 
             if len(sobj):
                 sobj['mag_calib'] = sobj['mag'] + m['zero_fn'](

@@ -1,0 +1,21 @@
+[Unit]
+Description=STDWeb Celery Worker
+After=network.target redis-server.service
+Wants=redis-server.service
+
+[Service]
+Type=simple
+User=pyl
+Group=pyl
+WorkingDirectory=/var/www/stdweb
+Environment=PATH=/var/www/stdweb/.venv/bin:/usr/local/bin:/usr/bin
+ExecStart=/var/www/stdweb/.venv/bin/celery -A stdweb worker \
+    --concurrency=6 \
+    --max-tasks-per-child=20 \
+    --loglevel=INFO \
+    --logfile=/var/log/stdweb/celery-worker.log
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

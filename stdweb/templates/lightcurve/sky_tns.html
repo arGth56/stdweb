@@ -1,0 +1,31 @@
+{% if sky %}
+  {{ sky|json_script:"sky-data" }}
+  <div class="sky-tns">
+    <div id="aladin-lite-div" class="sky-map" role="img" aria-label="Sky view of the target"></div>
+    <aside class="tns-card">
+      <h2>TNS</h2>
+      {% if tns and tns.tns_name %}
+        <dl>
+          <div><dt>Object</dt><dd>
+            {% if tns.tns_url %}<a href="{{ tns.tns_url }}" target="_blank" rel="noopener">{{ tns.tns_name }}</a>
+            {% else %}{{ tns.tns_name }}{% endif %}
+          </dd></div>
+          {% if tns.obj_type %}<div><dt>Type</dt><dd>{{ tns.obj_type }}</dd></div>{% endif %}
+          {% if tns.host_name %}<div><dt>Host</dt><dd>{{ tns.host_name }}</dd></div>{% endif %}
+          {% if tns.redshift %}<div><dt>Redshift</dt><dd>{{ tns.redshift }}</dd></div>{% endif %}
+          <div><dt>Discovery</dt><dd>{{ tns.discovery_iso|default:"—" }}
+            {% if tns.disc_mag %} · {{ tns.disc_mag|floatformat:2 }} {{ tns.disc_filter }}{% endif %}
+          </dd></div>
+          {% if tns.reporting_group %}<div><dt>Reported by</dt><dd>{{ tns.reporting_group }}</dd></div>{% endif %}
+          {% if tns_offset %}<div><dt>Offset</dt><dd>{{ tns_offset }} from STDWeb position</dd></div>{% endif %}
+        </dl>
+      {% else %}
+        <p class="lc-muted">No TNS object within 8″ of this position.</p>
+      {% endif %}
+      <p class="tns-links">
+        <a href="https://www.wis-tns.org/search?ra={{ sky.ra }}&amp;decl={{ sky.dec }}&amp;radius=10&amp;coords_unit=arcsec" target="_blank" rel="noopener">TNS cone search</a>
+      </p>
+    </aside>
+  </div>
+  <p class="lc-muted sky-legend">Blue circle: STDWeb position{% if tns %} · orange cross: TNS{% endif %} · drag to pan, scroll to zoom</p>
+{% endif %}

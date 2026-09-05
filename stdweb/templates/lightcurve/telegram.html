@@ -1,0 +1,47 @@
+{% extends "template.html" %}
+
+{% block ptitle %}Telegram : STDWeb{% endblock %}
+{% block title %}Telegram{% endblock %}
+
+{% block content %}
+  <p class="text-muted">
+    Each telegram is one measurement: editable text, a public task link, and a target cutout.
+  </p>
+
+  <form class="row g-2 mb-4" method="get" action="{% url 'telegram' %}">
+    <div class="col-md-6">
+      <input class="form-control" type="search" name="name" value="{{ query }}"
+             placeholder="Alert name or observer" aria-label="Search telegrams">
+    </div>
+    <div class="col-auto">
+      <button class="btn btn-primary" type="submit">Search</button>
+    </div>
+  </form>
+
+  {% if objects %}
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead>
+          <tr>
+            <th>Object</th>
+            <th>Measure</th>
+            <th>UTC</th>
+            <th>Observer</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for o in objects %}
+            <tr>
+              <td><a href="{{ o.url }}">{{ o.object_name }}</a></td>
+              <td>{{ o.mag_s }} <span class="text-muted">{{ o.filt }}</span></td>
+              <td class="font-monospace">{{ o.time }}</td>
+              <td>{{ o.observer }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="text-muted">No telegrams yet. Publish a measurement from its finished task.</p>
+  {% endif %}
+{% endblock %}

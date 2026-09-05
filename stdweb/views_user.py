@@ -1,12 +1,64 @@
 import os
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth import login
 from django.contrib import messages
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_protect
 from django.http import HttpResponse, Http404
 from django.conf import settings
 from rest_framework.authtoken.models import Token
+
+from .forms import RegisterForm, AccountShareForm
+from .models import get_user_profile
+
+
+def register(request):
+    if not settings.REGISTRATION_OPEN:
+        messages.warning(request, "Account registration is not open.")
+        return redirect("login")
+    if request.user.is_authenticated:
+        return redirect("index")
+    if request.method == "POST":
+        form = RegisterForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            login(request, user)
+            messages.success(request, "Account created. You are now logged in.")
+            return redirect("index")
+    else:
+        form = RegisterForm()
+    return render(request, "registration/register.html", {"form": form})
+
+
+@login_required
+def account(request):
+    profile = get_user_profile(request.user)
+    if request.method == 'POST':
+        form = AccountShareForm(request.POST)
+        if form.is_valid():
+            profile.affiliation = (form.cleaned_data.get('affiliation') or '').strip()
+            radius = form.cleaned_data.get('telegram_radius_arcmin')
+            age = form.cleaned_data.get('telegram_alert_age_hours')
+            if radius is not None:
+                profile.telegram_radius_arcmin = float(radius)
+            if age is not None:
+                profile.telegram_alert_age_hours = float(age)
+            profile.save(update_fields=[
+                'affiliation', 'telegram_radius_arcmin', 'telegram_alert_age_hours',
+            ])
+            messages.success(request, 'Account saved.')
+            return redirect('account')
+    else:
+        form = AccountShareForm(initial={
+            'affiliation': profile.affiliation,
+            'telegram_radius_arcmin': profile.telegram_radius_arcmin,
+            'telegram_alert_age_hours': profile.telegram_alert_age_hours,
+        })
+    return render(request, 'account.html', {
+        'form': form,
+        'profile': profile,
+    })
 
 
 @login_required

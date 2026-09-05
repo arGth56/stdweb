@@ -37,6 +37,11 @@ class TaskUploadSerializer(serializers.ModelSerializer):
     inspect_bg = serializers.BooleanField(required=False, help_text="Inspect background")
     centroid_targets = serializers.BooleanField(required=False, help_text="Centroid targets")
     nonlin = serializers.BooleanField(required=False, help_text="Non-linearity correction")
+
+    # Template-subtraction filtering flags
+    filter_vizier = serializers.BooleanField(required=False, help_text="Filter Vizier catalogues")
+    filter_skybot = serializers.BooleanField(required=False, help_text="Filter moving objects (SkyBoT)")
+    filter_prefilter = serializers.BooleanField(required=False, help_text="Machine-learning pre-filter for detections")
     
     # Blind matching parameters
     blind_match_ps_lo = serializers.FloatField(required=False, allow_null=True, help_text="Scale lower limit, arcsec/pix")
@@ -46,11 +51,23 @@ class TaskUploadSerializer(serializers.ModelSerializer):
     
     # Target specification
     target = serializers.CharField(required=False, allow_blank=True, help_text="Target name or coordinates")
+
+    # Template selection
+    template = serializers.CharField(required=False, allow_blank=True, help_text="Internal template code (e.g. 'ps1')")
+    template_catalog = serializers.CharField(required=False, allow_blank=True, help_text="Template catalogue alias (e.g. 'ZTF_DR7')")
     
     # Inspection parameters
     gain = serializers.FloatField(required=False, allow_null=True, help_text="Gain, e/ADU")
     saturation = serializers.FloatField(required=False, allow_null=True, help_text="Saturation level, ADU")
     time = serializers.CharField(required=False, allow_blank=True, help_text="Time")
+
+    # Template selection
+    template = serializers.CharField(required=False, allow_blank=True, help_text="Internal template code (e.g. 'ztf')")
+    template_catalog = serializers.CharField(required=False, allow_blank=True, help_text="Template catalogue alias (e.g. 'ZTF_DR7')")
+    template_filter = serializers.ChoiceField(
+        choices=[('', 'Auto'), ('u', 'u'), ('g', 'g'), ('r', 'r'), ('i', 'i'), ('z', 'z')],
+        required=False, allow_blank=True, help_text="Override template band (u/g/r/i/z); blank = auto"
+    )
     
     class Meta:
         model = Task
@@ -64,7 +81,9 @@ class TaskUploadSerializer(serializers.ModelSerializer):
             'prefilter_detections', 'filter_blends', 'diagnose_color', 'refine_wcs', 
             'blind_match_wcs', 'inspect_bg', 'centroid_targets', 'nonlin',
             'blind_match_ps_lo', 'blind_match_ps_up', 'blind_match_center', 'blind_match_sr0',
-            'target', 'gain', 'saturation', 'time'
+            'target', 'gain', 'saturation', 'time',
+            'template', 'template_catalog', 'template_filter'
+            , 'filter_vizier', 'filter_skybot', 'filter_prefilter'
         ]
         read_only_fields = ['original_name']
     

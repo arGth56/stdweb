@@ -123,3 +123,6 @@ db.sqlite3
 dump.rdb
 
 /notebooks/
+
+# Local-only acquisition notes / deploy (branch local/acquisition-seo)
+/local/

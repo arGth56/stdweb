@@ -1,0 +1,43 @@
+{% extends "lightcurve/base.html" %}
+
+{% block title %}Public lightcurves{% endblock %}
+
+{% block content %}
+  <h1>Public lightcurves</h1>
+  <p class="lc-lead">
+    Each finished photometry task stores a point at the target coordinates.
+    Observers publish a target from that task — not their whole account.
+  </p>
+
+  {% if user.is_authenticated %}
+    <p class="lc-note">
+      After photometry finishes, open the task and click
+      <strong>Publish to Telegram</strong>.
+    </p>
+  {% endif %}
+
+  <form class="lc-search" method="get" action="{% url 'lightcurve' %}">
+    <input type="search" name="q" value="{{ query }}" placeholder="Target name or RA Dec (deg)" aria-label="Search targets">
+    <button type="submit">Find</button>
+  </form>
+
+  {% if clusters %}
+    <ul class="lc-targets">
+      {% for c in clusters %}
+        <li>
+          <a href="{% url 'lightcurve_target' ra=c.ra_s dec=c.dec_s %}">
+            <span class="lc-target-name">{% if c.name %}{{ c.name }}{% else %}unnamed{% endif %}</span>
+            <span class="lc-target-meta">
+              {{ c.ra|floatformat:5 }}&nbsp;{{ c.dec|floatformat:5 }}
+              · {{ c.n }} point{{ c.n|pluralize }}
+              · {{ c.filters|join:", " }}
+              · {{ c.observers|join:", " }}
+            </span>
+          </a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="lc-empty">No public lightcurve points yet.</p>
+  {% endif %}
+{% endblock %}

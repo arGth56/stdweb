@@ -1,0 +1,29 @@
+{% extends "lightcurve/base.html" %}
+{% load static %}
+
+{% block title %}{% if name %}{{ name }}{% else %}{{ ra|floatformat:5 }} {{ dec|floatformat:5 }}{% endif %}{% endblock %}
+
+{% block head %}
+  <script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js" charset="utf-8"></script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <script src="{% static 'sky_tns.js' %}"></script>
+  <script src="{% static 'lightcurve.js' %}"></script>
+{% endblock %}
+
+{% block content %}
+  <p class="lc-back"><a href="{% url 'lightcurve' %}">← all targets</a></p>
+  <h1>{% if name %}{{ name }}{% else %}Target{% endif %}</h1>
+  <p class="lc-lead">
+    <span class="lc-coords">{{ ra|floatformat:5 }}° {{ dec|floatformat:5 }}°</span>
+    {% if filters %} · {{ filters|join:", " }}{% endif %}
+    · {{ n }} public point{{ n|pluralize }}
+    · <a href="{{ csv_url }}">CSV</a>
+    {% if telegram_url %}· <a href="{{ telegram_url }}">telegram</a>{% endif %}
+  </p>
+
+  {% include "lightcurve/sky_tns.html" %}
+
+  <div id="lc-plot" class="lc-plot" data-url="{{ json_url }}"></div>
+  <p class="lc-hint">Legend toggles filters. Inverted triangles are upper limits. The plot refreshes as new tasks finish.</p>
+  <div id="lc-table-wrap"></div>
+{% endblock %}

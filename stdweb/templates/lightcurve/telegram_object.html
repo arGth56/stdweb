@@ -1,0 +1,37 @@
+{% extends "template.html" %}
+
+{% block ptitle %}{{ obj.object_name }} : Telegram : STDWeb{% endblock %}
+{% block title %}{{ obj.object_name }}{% endblock %}
+
+{% block content %}
+  <p class="mb-3"><a href="{% url 'telegram' %}">← all telegrams</a></p>
+
+  {% if obj.title and obj.title != obj.object_name %}
+    <p class="text-muted">{{ obj.title }}</p>
+  {% endif %}
+
+  <h2 class="h6 text-uppercase text-muted">Text</h2>
+  <pre class="border rounded p-3 font-monospace" style="white-space: pre-wrap;">{{ obj.body }}</pre>
+
+  <h2 class="h6 text-uppercase text-muted mt-4">Measure</h2>
+  <p>
+    {{ obj.time }} UT · MJD {{ obj.mjd|floatformat:5 }} ·
+    <strong>{{ obj.filt }} = {{ obj.mag_s }}</strong>
+    {% if obj.is_diff %} <span class="text-muted">(difference image)</span>{% endif %}
+    · {{ obj.observer }}
+  </p>
+
+  <h2 class="h6 text-uppercase text-muted mt-4">Links</h2>
+  <p>
+    <a href="{{ obj.task_url }}">STDWeb task {{ obj.task_id }}</a>
+    {% if obj.alert_url %}
+      · <a href="{{ obj.alert_url }}" target="_blank" rel="noopener">{{ obj.alert_label }}</a>
+    {% endif %}
+  </p>
+
+  {% if obj.has_cutout %}
+    <h2 class="h6 text-uppercase text-muted mt-4">Target</h2>
+    <img class="img-fluid border rounded bg-white" src="{{ obj.cutout_url }}"
+         alt="Target cutout with overlay" style="max-width: 480px;">
+  {% endif %}
+{% endblock %}

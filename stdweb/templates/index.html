@@ -3,12 +3,25 @@
 {% load crispy_forms_tags %}
 {% load filters %}
 
-{% block title %}Simple Transient Detection for the Web{% endblock %}
+{% block ptitle %}STDWeb — free science-grade photometry on the web{% endblock %}
+{% block meta_description %}One of the most capable free web tools for science-grade astronomical photometry: Gaia-calibrated G/BP/RP, blind astrometry, template subtraction, and transient detection from FITS — full STDPipe workflow in your browser.{% endblock %}
+
+{% block title %}Science-grade photometry on the web — free{% endblock %}
 
 {% block content %}
 
+  <p class="lead">
+    <strong>STDWeb</strong> brings a full transient and photometry pipeline to your browser — for free.
+    Upload FITS frames and run <em>science-grade</em> analysis: astrometry, Gaia-calibrated photometry (G/BP/RP),
+    optional template subtraction, forced photometry, and simple transient detection, powered by
+    <a href="https://github.com/karpov-sv/stdpipe">STDPipe</a>. No local install; used in production for
+    alert follow-up (e.g. RAPAS / Observatoire de Bretagne Sud).
+  </p>
+
   <p>
-    This is a simple web-based tool for a quick-look photometry and transient detection in astronomical images. It is based on <a href="https://github.com/karpov-sv/stdpipe">STDPipe</a> library and tries to implement a self-consistent and mostly automatic data analysis workflow from its routines.
+    The service implements a self-consistent, mostly automatic workflow from STDPipe routines — one of the few
+    places on the web where amateur and professional observers can get publication-quality calibrated magnitudes
+    this quickly.
   </p>
 
   <!--

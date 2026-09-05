@@ -21,6 +21,8 @@ from . import forms
 from . import celery_tasks
 from . import celery
 from . import processing
+from . import lightcurve
+from . import alerts
 
 def tasks(request, id=None):
     context = {}
@@ -48,6 +50,21 @@ def tasks(request, id=None):
         if task.celery_id is not None and request.method == 'POST':
             messages.warning(request, f"Task {id} is already running")
             return HttpResponseRedirect(request.path_info)
+
+        if request.method == 'POST':
+            action = request.POST.get('action')
+            if action == 'publish_telegram':
+                return HttpResponseRedirect(reverse('telegram_compose', kwargs={'id': id}))
+            if action == 'unpublish_telegram':
+                if not (request.user.is_authenticated and (request.user.is_staff or request.user == task.user)):
+                    messages.error(request, 'Only the observer can unpublish this photometry.')
+                    return HttpResponseRedirect(request.path_info)
+                n, point = lightcurve.set_published_for_task(task, False)
+                if not n or point is None:
+                    messages.error(request, 'No telegram to remove for this task.')
+                    return HttpResponseRedirect(request.path_info)
+                messages.success(request, 'Removed this measurement from Telegram.')
+                return HttpResponseRedirect(request.path_info)
 
         all_forms = {}
 
@@ -207,10 +224,66 @@ def tasks(request, id=None):
         context['supported_catalogs'] = processing.supported_catalogs
         context['supported_templates'] = processing.supported_templates
 
+        # Photometry quality warnings (stored in config by check_photometry_quality)
+        context['photometry_warnings'] = task.config.get('photometry_warnings', [])
+
+        ra = task.config.get('target_ra')
+        dec = task.config.get('target_dec')
+        context['telegram_url'] = None
+        context['telegram_published'] = False
+        context['can_publish_telegram'] = False
+        point = models.LightcurvePoint.objects.filter(task=task).first()
+        has_phot = point is not None or (
+            'target.vot' in context['files'] or 'sub_target.vot' in context['files']
+        )
+        notice = None
+        if point is not None:
+            notice = models.TelegramNotice.objects.filter(point=point).first()
+            context['telegram_published'] = notice is not None
+            if notice:
+                context['telegram_url'] = reverse('telegram_detail', kwargs={'pk': notice.id})
+        if has_phot:
+            context['can_publish_telegram'] = bool(context['user_may_submit'] and not task.celery_id)
+
+        tns_alert = (task.config or {}).get('tns_alert')
+        stale_tns = (
+            tns_alert
+            and not tns_alert.get('matched')
+            and float(tns_alert.get('radius_arcsec') or 0) < 50
+        )
+        if (not tns_alert or stale_tns) and ra is not None and dec is not None:
+            name = str((task.config or {}).get('target') or '').splitlines()[0].strip()
+            try:
+                tns_alert = alerts.match_target(float(ra), float(dec), name=name)
+            except Exception:
+                tns_alert = None
+        context['tns_alert'] = tns_alert
+
+        ep_alert = (task.config or {}).get('ep_alert')
+        if not ep_alert:
+            image = os.path.join(path, 'image.fits')
+            try:
+                ep_alert = alerts.match_ep_alert(
+                    ra, dec,
+                    texts=(
+                        (task.config or {}).get('target'),
+                        (task.config or {}).get('fits_object'),
+                    ),
+                    image_path=image if os.path.exists(image) else None,
+                )
+            except Exception:
+                ep_alert = None
+            if ep_alert and not ep_alert.get('trigger') and not ep_alert.get('matched'):
+                ep_alert = None
+        context['ep_alert'] = ep_alert
+
         if 'candidates_simple.vot' in context['files']:
             candidates_simple = Table.read(os.path.join(path, 'candidates_simple.vot'))
             if candidates_simple:
-                candidates_simple.sort('flux', reverse=True)
+                if 'transient_score' in candidates_simple.colnames:
+                    candidates_simple.sort('transient_score', reverse=True)
+                else:
+                    candidates_simple.sort('flux', reverse=True)
                 context['candidates_simple'] = candidates_simple
 
         if 'candidates.vot' in context['files']:
@@ -345,7 +418,10 @@ def task_candidates(request, id, filename='candidates.vot'):
     if os.path.exists(os.path.join(path, filename)):
         candidates = Table.read(os.path.join(path, filename))
         if candidates:
-            candidates.sort('flux', reverse=True)
+            if 'simple' in filename and 'transient_score' in candidates.colnames:
+                candidates.sort('transient_score', reverse=True)
+            else:
+                candidates.sort('flux', reverse=True)
             context['candidates'] = candidates
             context['filename'] = filename
 

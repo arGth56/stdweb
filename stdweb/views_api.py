@@ -1,4 +1,5 @@
 import os
+import pickle
 import shutil
 from django.conf import settings
 from rest_framework import status
@@ -8,11 +9,15 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
 from celery import chain
+import numpy as np
+from astropy.table import Table
 
 from .models import Task, Preset
 from .serializers import TaskUploadSerializer, TaskSerializer, PresetSerializer
 from .views import handle_uploaded_file
 from . import celery_tasks
+from django.http import HttpResponse
+import csv
 
 
 class TaskUploadAPIView(APIView):
@@ -82,8 +87,11 @@ class TaskUploadAPIView(APIView):
                 'prefilter_detections', 'filter_blends', 'diagnose_color', 'refine_wcs',
                 'blind_match_wcs', 'inspect_bg', 'centroid_targets', 'nonlin',
                 'blind_match_ps_lo', 'blind_match_ps_up', 'blind_match_center', 'blind_match_sr0',
+                'filter_vizier', 'filter_skybot', 'filter_prefilter',
                 # Inspection parameters
-                'target', 'gain', 'saturation', 'time'
+                'target', 'gain', 'saturation', 'time',
+                # Template selection
+                'template', 'template_filter'
             ]
             
             for param in config_params:
@@ -220,8 +228,11 @@ def task_action_api(request, task_id):
             'prefilter_detections', 'filter_blends', 'diagnose_color', 'refine_wcs',
             'blind_match_wcs', 'inspect_bg', 'centroid_targets', 'nonlin',
             'blind_match_ps_lo', 'blind_match_ps_up', 'blind_match_center', 'blind_match_sr0',
+            'filter_vizier', 'filter_skybot', 'filter_prefilter',
             # Inspection parameters
-            'target', 'gain', 'saturation', 'time'
+            'target', 'gain', 'saturation', 'time',
+            # Template selection
+            'template', 'template_catalog', 'template_filter'
         ]
 
         updated = False
@@ -282,3 +293,227 @@ def task_action_api(request, task_id):
             {'error': 'Task not found'}, 
             status=status.HTTP_404_NOT_FOUND
         ) 
+
+
+# ---------------------------------------------------------------------------
+# Endpoint: upload custom template FITS file
+# ---------------------------------------------------------------------------
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def task_upload_template_api(request, task_id):
+    """Upload a custom template FITS file as custom_template.fits in the task dir."""
+    if 'template_file' not in request.FILES:
+        return Response({'error': 'No file provided (use form field "template_file")'},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        task = Task.objects.get(id=task_id, user=request.user)
+    except Task.DoesNotExist:
+        return Response({'error': 'Task not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        handle_uploaded_file(request.FILES['template_file'],
+                             os.path.join(task.path(), 'custom_template.fits'))
+    except Exception as exc:
+        return Response({'error': f'Upload failed: {exc}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    return Response({'message': 'Custom template uploaded as custom_template.fits'}) 
+
+
+# ---------------------------------------------------------------------------
+# Endpoint: export tasks as CSV (email, created date, original image name)
+# ---------------------------------------------------------------------------
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def task_export_csv_api(request):
+    """Return a CSV of tasks with columns: email, created, original_name.
+
+    - If the requesting user is staff, include all tasks.
+    - Otherwise, include only tasks belonging to the user.
+    """
+    if request.user.is_staff:
+        queryset = Task.objects.all().order_by('-created')
+    else:
+        queryset = Task.objects.filter(user=request.user).order_by('-created')
+
+    # Prepare CSV response
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = 'attachment; filename="tasks_export.csv"'
+
+    writer = csv.writer(response)
+    writer.writerow(['email', 'username', 'created', 'original_name'])
+
+    for task in queryset.select_related('user').only('original_name', 'created', 'user__email', 'user__username'):
+        username = task.user.username if task.user and task.user.username else ''
+        email = ''
+        if task.user:
+            if getattr(task.user, 'email', None):
+                email = task.user.email
+            elif username and '@' in username:
+                # Fallback: if username looks like an email, use it
+                email = username
+        writer.writerow([email, username, task.created.isoformat(), task.original_name])
+
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Endpoint: export comparison stars with instrumental mags & astrometry
+# ---------------------------------------------------------------------------
+
+@api_view(['GET'])
+@permission_classes([])
+def task_comparison_stars_csv(request, task_id):
+    """Export the catalogue of matched comparison stars for a task.
+
+    Each row is a star used (or considered) in the photometric calibration,
+    with its astrometric position, catalog magnitudes, instrumental
+    magnitude, zero-point residual, and whether it was kept in the final
+    fit.  This allows inter-observer comparison of calibration quality.
+
+    Query params:
+        ?good_only=1   — only export stars kept in the final fit
+    """
+    try:
+        task = Task.objects.get(id=task_id)
+    except Task.DoesNotExist:
+        return Response({'error': 'Task not found'},
+                        status=status.HTTP_404_NOT_FOUND)
+
+    basepath = task.path()
+
+    phot_path = os.path.join(basepath, 'photometry.pickle')
+    obj_path = os.path.join(basepath, 'objects.vot')
+    cat_path = os.path.join(basepath, 'cat.vot')
+
+    for fpath, label in [(phot_path, 'photometry.pickle'),
+                         (obj_path, 'objects.vot'),
+                         (cat_path, 'cat.vot')]:
+        if not os.path.exists(fpath):
+            return Response(
+                {'error': f'{label} not found — run photometry first'},
+                status=status.HTTP_404_NOT_FOUND)
+
+    with open(phot_path, 'rb') as f:
+        m = pickle.load(f)
+
+    obj = Table.read(obj_path)
+    cat = Table.read(cat_path)
+
+    oidx = m['oidx']
+    cidx = m['cidx']
+    idx = m.get('idx', np.ones(len(oidx), dtype=bool))
+
+    good_only = request.GET.get('good_only', '').lower() in ('1', 'true', 'yes')
+
+    cat_mag_col = m.get('cat_col_mag', '')
+    cat_color1 = m.get('cat_col_mag1', '')
+    cat_color2 = m.get('cat_col_mag2', '')
+    color_term = m.get('color_term')
+
+    gaia_cols = [c for c in cat.colnames
+                 if c.lower() in ('gmag', 'bpmag', 'rpmag',
+                                  'e_gmag', 'e_bpmag', 'e_rpmag')]
+    photo_cols = [c for c in cat.colnames
+                  if c.lower().endswith('mag') and c not in gaia_cols]
+
+    cfg = task.config or {}
+    target = cfg.get('target', '').strip().replace(' ', '_')
+    filt = cfg.get('filter', '')
+    obs_time = cfg.get('time', '')
+    obs_date = obs_time[:10] if obs_time else task.created.strftime('%Y-%m-%d')
+
+    exptime = ''
+    fits_path = os.path.join(basepath, 'image.fits')
+    if os.path.exists(fits_path):
+        try:
+            from astropy.io import fits as pyfits
+            exptime = pyfits.getheader(fits_path, -1).get('EXPTIME', '')
+        except Exception:
+            pass
+    exp_str = f'_{int(float(exptime))}s' if exptime else ''
+
+    parts = [p for p in [target, filt, exp_str.lstrip('_'), obs_date] if p]
+    slug = '_'.join(parts) if parts else f'task_{task_id}'
+
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = (
+        f'attachment; filename="{slug}_comparison_stars.csv"')
+
+    writer = csv.writer(response)
+
+    header = [
+        'ra', 'dec',
+        'x', 'y',
+        'inst_mag', 'inst_mag_err',
+        'cat_mag', 'cat_mag_err',
+        'zero_point', 'zero_point_model', 'residual',
+        'color',
+        'used_in_fit',
+        'flags',
+        'fwhm',
+    ]
+    header += gaia_cols
+    header += photo_cols
+
+    meta_row = [
+        f'# task_id={task_id}',
+        f'cat_mag_column={cat_mag_col}',
+        f'color={cat_color1}-{cat_color2}' if cat_color1 else '',
+        f'color_term={color_term}',
+        f'intrinsic_rms={m.get("intrinsic_rms", "")}',
+        f'n_matched={len(oidx)}',
+        f'n_used={int(np.sum(idx))}',
+    ]
+    writer.writerow(meta_row)
+    writer.writerow(header)
+
+    for k in range(len(oidx)):
+        if good_only and not idx[k]:
+            continue
+
+        oi = oidx[k]
+        ci = cidx[k]
+        o = obj[oi]
+        c = cat[ci]
+
+        zp = float(m['zero'][k]) if 'zero' in m else ''
+        zp_model = float(m['zero_model'][k]) if 'zero_model' in m else ''
+        resid = float(zp - zp_model) if zp != '' and zp_model != '' else ''
+
+        omag = float(m['omag'][k]) if 'omag' in m else ''
+        omag_err = float(m['omag_err'][k]) if 'omag_err' in m else ''
+        cmag = float(m['cmag'][k]) if 'cmag' in m else ''
+        cmag_err = float(m['cmag_err'][k]) if 'cmag_err' in m else ''
+        color = float(m['color'][k]) if 'color' in m and np.isfinite(m['color'][k]) else ''
+
+        row = [
+            f"{float(o['ra']):.7f}",
+            f"{float(o['dec']):.7f}",
+            f"{float(o['x']):.2f}",
+            f"{float(o['y']):.2f}",
+            f"{omag:.4f}" if omag != '' else '',
+            f"{omag_err:.4f}" if omag_err != '' else '',
+            f"{cmag:.4f}" if cmag != '' else '',
+            f"{cmag_err:.4f}" if cmag_err != '' else '',
+            f"{zp:.4f}" if zp != '' else '',
+            f"{zp_model:.4f}" if zp_model != '' else '',
+            f"{resid:.4f}" if resid != '' else '',
+            f"{color:.4f}" if color != '' else '',
+            '1' if idx[k] else '0',
+            int(o['flags']),
+            f"{float(o['fwhm']):.2f}" if 'fwhm' in o.colnames else '',
+        ]
+
+        for gc in gaia_cols:
+            val = c[gc]
+            row.append(f"{float(val):.4f}" if np.isfinite(val) else '')
+        for pc in photo_cols:
+            val = c[pc]
+            row.append(f"{float(val):.4f}" if np.isfinite(val) else '')
+
+        writer.writerow(row)
+
+    return response

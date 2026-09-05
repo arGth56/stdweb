@@ -13,10 +13,16 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 import os
 
 from pathlib import Path
-from decouple import config # Getting environment from .env
+from decouple import Config, RepositoryEnv, RepositoryEmpty
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+_env_path = BASE_DIR / '.env'
+if _env_path.is_file():
+    config = Config(RepositoryEnv(_env_path))
+else:
+    config = Config(RepositoryEmpty())
 
 
 # Quick-start development settings - unsuitable for production
@@ -26,9 +32,24 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = config('SECRET_KEY', default='some-secret-key', cast=str)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = config('DEBUG', default=False, cast=bool)
+DEBUG = config('DEBUG', default=True, cast=bool)
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = config(
+    'ALLOWED_HOSTS',
+    default='*',
+    cast=lambda v: [h.strip() for h in v.split(',') if h.strip()],
+)
+
+_csrf_origins = config('CSRF_TRUSTED_ORIGINS', default='')
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in _csrf_origins.split(',') if o.strip()]
+
+# nginx / Cloudflare terminate TLS; needed for correct scheme and CSRF behind proxy
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+AUTHENTICATION_BACKENDS = [
+    'stdweb.backends.EmailAuthBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
 
 
 # Application definition
@@ -74,6 +95,7 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'stdweb.context_processors.expose_settings',
+                'stdweb.context_processors.acquisition_seo',
             ],
         },
     },
@@ -89,6 +111,9 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
+        'OPTIONS': {
+            'timeout': 30,  # seconds to wait before raising "database is locked"
+        },
     }
 }
 
@@ -128,7 +153,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
 STATIC_URL = 'static/'
-STATIC_ROOT = 'static/'
+STATIC_ROOT = config('STATIC_ROOT', default=os.path.join(BASE_DIR, 'static'))
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
@@ -142,6 +167,54 @@ CRISPY_TEMPLATE_PACK = "bootstrap5"
 LOGIN_URL = 'login'
 LOGIN_REDIRECT_URL = 'index'
 LOGOUT_REDIRECT_URL = 'index'
+
+REGISTRATION_OPEN = config('REGISTRATION_OPEN', default=False, cast=bool)
+
+# Optional hosting credit (footer band). Leave URL empty to hide.
+HOSTING_SITE_NAME = config('HOSTING_SITE_NAME', default='')
+HOSTING_SITE_URL = config('HOSTING_SITE_URL', default='')
+HOSTING_TAGLINE = config(
+    'HOSTING_TAGLINE',
+    default='Photometry & transient detection — part of the ObsBS data pipeline',
+)
+
+# Acquisition / SEO (référencement). Off by default; enable only on ObsBS production (.env).
+ACQUISITION_SEO_ENABLED = config('ACQUISITION_SEO_ENABLED', default=False, cast=bool)
+SITE_PUBLIC_BASE_URL = config('SITE_PUBLIC_BASE_URL', default='')
+SEO_SITE_NAME = config('SEO_SITE_NAME', default='STDWeb')
+SEO_DEFAULT_DESCRIPTION = config(
+    'SEO_DEFAULT_DESCRIPTION',
+    default=(
+        'Free web pipeline for science-grade astronomical photometry: upload FITS, get Gaia-calibrated '
+        'G/BP/RP magnitudes, astrometry, template subtraction, and transient detection — STDPipe on the web.'
+    ),
+)
+SEO_KEYWORDS = config(
+    'SEO_KEYWORDS',
+    default=(
+        'science-grade photometry, free astronomical software, STDWeb, FITS photometry, Gaia calibration, '
+        'transient detection, astrometry, STDPipe, web photometry, RAPAS, supernova, GRB follow-up, '
+        'difference imaging, amateur-professional astronomy'
+    ),
+)
+SEO_OG_IMAGE = config('SEO_OG_IMAGE', default='')
+SEO_ORGANIZATION_NAME = config('SEO_ORGANIZATION_NAME', default='')
+SEO_ORGANIZATION_URL = config('SEO_ORGANIZATION_URL', default='')
+SEO_HTML_LANG = config('SEO_HTML_LANG', default='en')
+
+# Email (required for password reset). Console backend logs to gunicorn/journal if unset.
+EMAIL_BACKEND = config(
+    'EMAIL_BACKEND',
+    default='django.core.mail.backends.console.EmailBackend',
+)
+EMAIL_HOST = config('EMAIL_HOST', default='localhost')
+EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
+EMAIL_USE_SSL = config('EMAIL_USE_SSL', default=False, cast=bool)
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='stdweb@stdweb.org.uk')
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 # Paths for STDWeb
 DATA_PATH = config('DATA_PATH', default='data/')
@@ -193,9 +266,9 @@ STDPIPE_SCAMP = config('STDPIPE_SCAMP', default=None)
 # Path to PSFEx executable
 STDPIPE_PSFEX = config('STDPIPE_PSFEX', default=None)
 # Path to PSFEx executable
-STDPIPE_HOTPANTS = config('STDPIPE_HOTPANTS', default=None)
+STDPIPE_HOTPANTS = config('STDPIPE_HOTPANTS', default='/usr/local/bin/hotpants')
 # Path to SWarp executable
-STDPIPE_SWARP = config('STDPIPE_SWARP', default=None)
+STDPIPE_SWARP = config('STDPIPE_SWARP', default='/usr/local/bin/swarp')
 # Path to store PS1 download cache (if not set, use task-local cache)
 STDPIPE_PS1_CACHE = config('STDPIPE_PS1_CACHE', default=None)
 
@@ -219,4 +292,24 @@ REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
     ],
+}
+
+# /batch/upload is proxied through Django; FITS batches exceed the 2.5 MB default.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 500 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 32 * 1024 * 1024
+DATA_UPLOAD_MAX_NUMBER_FILES = 250
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'stderr': {'class': 'logging.StreamHandler'},
+    },
+    'loggers': {
+        'django.request': {
+            'handlers': ['stderr'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+    },
 }

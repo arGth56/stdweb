@@ -1,4 +1,5 @@
 from django import forms
+from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Field, Fieldset, Div, Row, Column, Submit, HTML
@@ -290,6 +291,10 @@ class TaskSubtractionForm(forms.Form):
 
     subtraction_method = forms.ChoiceField(choices=[('zogy', 'ZOGY'), ('hotpants', 'HOTPANTS')],
                                          initial='hotpants', required=False, label="Method")
+    template_filter = forms.ChoiceField(
+        choices=[('', 'Auto')] + [(_,_) for _ in ('u', 'g', 'r', 'i', 'z')],
+        required=False, label="Template band"
+    )
 
     filter_vizier = forms.BooleanField(initial=False, required=False, label="Filter Vizier catalogues")
     filter_skybot = forms.BooleanField(initial=False, required=False, label="Filter SkyBoT")
@@ -312,6 +317,7 @@ class TaskSubtractionForm(forms.Form):
                 Column('sub_size', css_class="col-md-2"),
                 Column('sub_overlap', css_class="col-md-2"),
                 Column('subtraction_method', css_class="col-md-2"),
+                Column('template_filter', css_class="col-md-auto"),
                 Column('hotpants_extra', id='hotpants_extra_col'),
                 css_class='align-items-end'
             ),
@@ -387,3 +393,55 @@ class SkyPortalUploadForm(forms.Form):
 
         if instruments is not None:
             self.fields['instrument'].choices = instruments
+
+
+class EmailAuthenticationForm(AuthenticationForm):
+    username = forms.CharField(
+        label="Email or username",
+        widget=forms.TextInput(
+            attrs={
+                "autocomplete": "username",
+                "placeholder": "Email or username",
+                "class": "form-control",
+            }
+        ),
+    )
+
+
+class RegisterForm(UserCreationForm):
+    email = forms.EmailField(required=False, label="Email (optional)")
+
+    class Meta(UserCreationForm.Meta):
+        fields = UserCreationForm.Meta.fields + ("email",)
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        user.email = self.cleaned_data.get("email", "")
+        if commit:
+            user.save()
+        return user
+
+
+class AccountShareForm(forms.Form):
+    affiliation = forms.CharField(
+        required=False,
+        max_length=120,
+        label='Affiliation',
+        help_text='Observatory or institute. Shown with your name on telegrams.',
+    )
+    telegram_radius_arcmin = forms.FloatField(
+        required=False,
+        min_value=0.01,
+        max_value=60,
+        initial=1.0,
+        label='Telegram match radius',
+        help_text='Arcminutes. Cone used to attach a TNS or EP/GCN alert when you compose a telegram.',
+    )
+    telegram_alert_age_hours = forms.FloatField(
+        required=False,
+        min_value=0.1,
+        max_value=8760,
+        initial=24.0,
+        label='Alert age window',
+        help_text='Hours. Older alerts are noted in the draft; you can still publish.',
+    )

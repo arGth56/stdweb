@@ -27,8 +27,44 @@ from . import views_tasks
 from . import views_celery
 from . import views_skyportal
 from . import views_user
+from . import views_batch
+from . import views_lightcurve
+from . import views_telegram
+from . import forms
 
 urlpatterns = [
+    # stdbatch (separate service on :8001). Same host so sessionid is sent.
+    path('batch', views_batch.batch_slash),
+    re_path(r'^batch/', views_batch.batch_proxy),
+
+    # Public lightcurves / telegrams (independent chrome; same host so the login cookie works).
+    path('lightcurve', views_lightcurve.lightcurve_slash),
+    path('lightcurve/', views_lightcurve.index, name='lightcurve'),
+    re_path(
+        r'^lightcurve/(?P<ra>[-+0-9.]+)/(?P<dec>[-+0-9.]+)/data\.json$',
+        views_lightcurve.target_json,
+        name='lightcurve_json',
+    ),
+    re_path(
+        r'^lightcurve/(?P<ra>[-+0-9.]+)/(?P<dec>[-+0-9.]+)/export\.csv$',
+        views_lightcurve.target_csv,
+        name='lightcurve_csv',
+    ),
+    re_path(
+        r'^lightcurve/(?P<ra>[-+0-9.]+)/(?P<dec>[-+0-9.]+)/$',
+        views_lightcurve.target,
+        name='lightcurve_target',
+    ),
+    path('telegram', views_telegram.telegram_slash),
+    path('telegram/', views_telegram.index, name='telegram'),
+    path('telegram/<int:pk>/', views_telegram.detail, name='telegram_detail'),
+    path('telegram/<int:pk>/cutout.png', views_telegram.cutout_png, name='telegram_cutout'),
+    re_path(
+        r'^telegram/(?P<ra>[-+0-9.]+)/(?P<dec>[-+0-9.]+)/$',
+        views_telegram.object_page,
+        name='telegram_object',
+    ),
+
     # path('', views.index, name='index'),
     path('', views.upload_file, name='index'),
 
@@ -48,6 +84,12 @@ urlpatterns = [
     # Tasks
     path('tasks/', views_tasks.tasks, {'id':None}, name='tasks'),
     path('tasks/<int:id>', views_tasks.tasks, name='tasks'),
+    path('tasks/<int:id>/telegram/', views_telegram.compose, name='telegram_compose'),
+    path(
+        'tasks/<int:id>/telegram/cutout.png',
+        views_telegram.task_cutout_png,
+        name='telegram_task_cutout',
+    ),
 
     path('tasks/<int:id>/preview/<path:path>', views_tasks.task_preview, name='task_preview'),
     path('tasks/<int:id>/view/<path:path>', views_tasks.task_download, {'attachment': False}, name='task_view'),
@@ -67,10 +109,44 @@ urlpatterns = [
     path('queue/<slug:id>/state', views_celery.get_queue, name='queue_state'),
 
     # Auth
-    path('login/', auth_views.LoginView.as_view(), name='login'),
+    path('login/', auth_views.LoginView.as_view(authentication_form=forms.EmailAuthenticationForm), name='login'),
+    path('register/', views_user.register, name='register'),
+    path('account/', views_user.account, name='account'),
     path('logout/', auth_views.LogoutView.as_view(), name='logout'),
     path('password/', auth_views.PasswordChangeView.as_view(success_url=reverse_lazy('password_change_done')), name='password'),
     path('password/done/', auth_views.PasswordChangeDoneView.as_view(), name='password_change_done'),
+    path(
+        'password/reset/',
+        auth_views.PasswordResetView.as_view(
+            template_name='registration/password_reset_form.html',
+            email_template_name='registration/password_reset_email.txt',
+            subject_template_name='registration/password_reset_subject.txt',
+            success_url=reverse_lazy('password_reset_done'),
+        ),
+        name='password_reset',
+    ),
+    path(
+        'password/reset/done/',
+        auth_views.PasswordResetDoneView.as_view(
+            template_name='registration/password_reset_done.html',
+        ),
+        name='password_reset_done',
+    ),
+    path(
+        'password/reset/<uidb64>/<token>/',
+        auth_views.PasswordResetConfirmView.as_view(
+            template_name='registration/password_reset_confirm.html',
+            success_url=reverse_lazy('password_reset_complete'),
+        ),
+        name='password_reset_confirm',
+    ),
+    path(
+        'password/reset/complete/',
+        auth_views.PasswordResetCompleteView.as_view(
+            template_name='registration/password_reset_complete.html',
+        ),
+        name='password_reset_complete',
+    ),
 
     # User management
     path('api-tokens/', views_user.api_tokens, name='api_tokens'),

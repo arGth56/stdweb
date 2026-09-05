@@ -9,15 +9,23 @@ import numpy as np
 
 from . import models
 from . import processing
+from . import lightcurve
 
 
 def fix_config(config):
     """
     Fix non-serializable Numpy types in config
     """
-    for key in config.keys():
-        if type(config[key]) == np.float32:
-            config[key] = float(config[key])
+    for key in list(config.keys()):
+        val = config[key]
+        # Convert numpy scalar types to plain Python types
+        if isinstance(val, (np.float32, np.float64, np.int32, np.int64)):
+            config[key] = val.item()
+            val = config[key]
+
+        # Replace NaN / Inf with None so that JSON serialization succeeds
+        if isinstance(val, float) and (np.isnan(val) or np.isinf(val)):
+            config[key] = None
 
 
 @shared_task(bind=True)
@@ -80,20 +88,27 @@ def task_inspect(self, id, finalize=True):
     try:
         processing.inspect_image(os.path.join(basepath, 'image.fits'), config, verbose=log)
         task.state = 'inspect_done'
-    except:
+    except Exception:
         import traceback
         log("\nError!\n", traceback.format_exc())
-
         task.state = 'inspect_failed'
-        task.celery_id = None
-
-    if finalize:
-        # End processing
-        task.celery_id = None
-        task.complete()
-
-    fix_config(config)
-    task.save()
+    finally:
+        try:
+            from . import alerts
+            alerts.attach_alerts_to_config(
+                config, log=log, image_path=os.path.join(basepath, 'image.fits'),
+            )
+        except Exception as exc:
+            log(f"Alert lookup failed: {exc}")
+        if finalize:
+            task.celery_id = None
+            task.complete()
+            fix_config(config)
+            task.save()
+        else:
+            # Do not write celery_id: this instance may be stale vs the chain id.
+            fix_config(config)
+            models.Task.objects.filter(pk=id).update(state=task.state, config=config)
 
 
 @shared_task(bind=True)
@@ -102,6 +117,7 @@ def task_photometry(self, id, finalize=True):
     basepath = task.path()
 
     config = task.config
+    config['_task_id'] = task.id
 
     log = partial(processing.print_to_file, logname=os.path.join(basepath, 'photometry.log'))
     log(clear=True)
@@ -124,6 +140,10 @@ def task_photometry(self, id, finalize=True):
 
     fix_config(config)
     task.save()
+    try:
+        lightcurve.upsert_from_task(task)
+    except Exception:
+        pass
 
 
 @shared_task(bind=True)
@@ -162,6 +182,7 @@ def task_subtraction(self, id, finalize=True):
     basepath = task.path()
 
     config = task.config
+    config['_task_id'] = task.id
 
     log = partial(processing.print_to_file, logname=os.path.join(basepath, 'subtraction.log'))
     log(clear=True)
@@ -184,3 +205,7 @@ def task_subtraction(self, id, finalize=True):
 
     fix_config(config)
     task.save()
+    try:
+        lightcurve.upsert_from_task(task)
+    except Exception:
+        pass

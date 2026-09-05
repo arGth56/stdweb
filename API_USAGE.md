@@ -232,6 +232,49 @@ curl -X GET http://your-domain/api/presets/ \
 ]
 ```
 
+### 5. Trigger template subtraction on an existing task
+
+**Endpoint:** `POST /api/tasks/{task_id}/action/`
+
+**Description:** Start the template-subtraction step (difference imaging) on a previously uploaded task.  The request body must be JSON and **must** include
+
+```json
+{"action": "subtraction"}
+```
+
+Any additional keys listed below are optional; when absent the backend uses the default shown in the “Default” column.
+
+| Key | Purpose | Type | Default if omitted |
+|-----|---------|------|--------------------|
+| `template_catalog` \| `template` | Choose the catalogue or internal code for the reference image (e.g. `"ZTF_DR7"`, `"PS1"`, `"ztf"`, `"custom"`) | string | `"ps1"` |
+| `sub_size` | Split image into tiles of this width (pixels) when searching for transients | integer | `1000` |
+| `sub_overlap` | Overlap between tiles (pixels) | integer | `50` |
+| `subtraction_method` | Algorithm: `"hotpants"` or `"zogy"` | string | `"hotpants"` |
+| `hotpants_extra` | Extra parameters forwarded to HOTPANTS | JSON object | `{ "ko":0, "bgo":0 }` |
+| `subtraction_mode` | `"detection"` (transient search) or `"target"` (forced photometry) | string | `"detection"` |
+| `sub_verbose` | Produce verbose intermediate products | boolean | `false` |
+| | **Filtering flags (NEW in v0.10.4):** |||
+| `filter_vizier` | Reject detections present in Gaia EDR3 / PS1 / SkyMapper | boolean | `false` |
+| `filter_skybot` | Reject known moving objects (IMCCE SkyBoT) | boolean | `false` |
+| `filter_prefilter` | Machine-learning pre-filter for spurious detections | boolean | `false` (UI default = **true**) |
+
+> ⚠️  The web UI shows “Pre-filtering” ticked by default; if you want the same behaviour via the API remember to add `"filter_prefilter": true` in your JSON payload.
+
+**Example:**
+
+```bash
+curl -X POST http://your-domain/api/tasks/123/action/ \
+     -H "Authorization: Token $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "action": "subtraction",
+           "template_catalog": "ZTF_DR7",
+           "filter_vizier": true,
+           "filter_skybot": true,
+           "filter_prefilter": true
+         }'
+```
+
 ## Task States
 
 Tasks can have the following states:

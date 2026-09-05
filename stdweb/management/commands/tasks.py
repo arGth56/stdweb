@@ -188,6 +188,8 @@ def run_task(task, run):
     if todo:
         todo.append(celery_tasks.task_finalize.subtask(args=[task.id], immutable=True))
 
-        task.celery_id = celery.chain(todo).apply_async()
         task.state = 'running'
+        task.celery_id = 'queued'
         task.save()
+        task.celery_id = celery.chain(todo).apply_async().id
+        task.save(update_fields=['celery_id'])
