@@ -349,6 +349,12 @@ def upload_file(request, base=settings.DATA_PATH):
                 task.user = request.user
                 task.save() # to populate task.id
 
+                # A freshly-created task.id must never reuse a stale/orphan directory
+                # (e.g. leftover from another machine's tasks synced onto this host).
+                if os.path.isdir(task.path()):
+                    shutil.rmtree(task.path())
+                os.makedirs(task.path())
+
                 handle_uploaded_file(upload, os.path.join(task.path(), 'image.fits'))
                 messages.success(request, "File uploaded as task " + str(task.id))
 
@@ -363,11 +369,11 @@ def upload_file(request, base=settings.DATA_PATH):
                 task.user = request.user
                 task.save() # to populate task.id
 
-                # TODO: merge into handle_uploaded_file?..
-                try:
-                    os.makedirs(task.path())
-                except OSError:
-                    pass
+                # A freshly-created task.id must never reuse a stale/orphan directory
+                # (e.g. leftover from another machine's tasks synced onto this host).
+                if os.path.isdir(task.path()):
+                    shutil.rmtree(task.path())
+                os.makedirs(task.path())
 
                 if ext is None:
                     shutil.copyfile(fullpath, os.path.join(task.path(), 'image.fits'))
