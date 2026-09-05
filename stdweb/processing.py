@@ -289,6 +289,63 @@ def get_wcs(filename, header=None, verbose=True):
     return wcs
 
 
+def _wcs_match_count(obj, cat, wcs, sr_deg, cat_col_ra='RAJ2000', cat_col_dec='DEJ2000'):
+    """How many detections land on catalogue stars within `sr_deg`."""
+    if (
+        wcs is None
+        or not getattr(wcs, 'is_celestial', False)
+        or obj is None
+        or cat is None
+        or not cat_col_ra
+        or not cat_col_dec
+        or cat_col_ra not in getattr(cat, 'colnames', [])
+        or cat_col_dec not in getattr(cat, 'colnames', [])
+    ):
+        return 0, None
+    try:
+        ra, dec = wcs.all_pix2world(np.asarray(obj['x'], float), np.asarray(obj['y'], float), 0)
+        _, _, dist = astrometry.spherical_match(
+            ra, dec,
+            np.asarray(cat[cat_col_ra], float),
+            np.asarray(cat[cat_col_dec], float),
+            sr_deg,
+        )
+    except Exception:
+        return 0, None
+    n = int(len(dist))
+    if n == 0:
+        return 0, None
+    return n, float(np.median(dist) * 3600.0)
+
+
+def _wcs_as_tpv(wcs, obj=None, cat=None, sr_deg=None, cat_col_ra=None, cat_col_dec=None, log=None):
+    """SIP → TPV without a SCAMP re-fit, for SWarp. Keep SIP if conversion wrecks matches."""
+    log = log or (lambda *args, **kwargs: None)
+    if wcs is None or not getattr(wcs, 'is_celestial', False) or getattr(wcs, 'sip', None) is None:
+        return wcs
+    try:
+        wcs2 = WCS(astrometry.wcs_sip2pv(wcs.to_header(relax=True)))
+    except Exception as exc:
+        log(f"SIP to TPV conversion failed ({exc}); keeping SIP WCS")
+        return wcs
+    if not wcs2.is_celestial:
+        return wcs
+    if obj is not None and cat is not None and sr_deg:
+        n_sip, _ = _wcs_match_count(obj, cat, wcs, sr_deg, cat_col_ra, cat_col_dec)
+        n_tpv, _ = _wcs_match_count(obj, cat, wcs2, sr_deg, cat_col_ra, cat_col_dec)
+        if n_sip >= 15 and n_tpv < 0.5 * n_sip:
+            log(f"SIP to TPV dropped matches {n_sip} → {n_tpv}; keeping SIP WCS")
+            return wcs
+    log("Converted SIP WCS to TPV for SWarp (no SCAMP re-fit)")
+    return wcs2
+
+
+def _fmt_match_stats(n, med):
+    if med is None:
+        return f"{n} matches"
+    return f"{n} matches, median {med:.2f} arcsec"
+
+
 def fix_header(header, verbose=True):
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
@@ -2026,41 +2083,91 @@ def photometry_image(filename, config, verbose=True, show=False):
             (not config.get('cat_col_color_mag2') or config['cat_col_color_mag2'] in cat.colnames)):
         raise RuntimeError('Catalogue does not have required magnitudes')
 
-    # Astrometric refinement
+    # Astrometric refinement. SCAMP (order 3) can return a "successful"
+    # degenerate TPV that is much worse than a good header SIP WCS — keep
+    # the original when that happens, and skip SCAMP when the original
+    # already matches the catalogue tightly.
     if config.get('refine_wcs', False):
         log("\n---- Astrometric refinement ----\n")
 
-        # Exclude pre-filtered detections and limit list size
-        obj_ast = obj[(obj['flags'] & 0x800) == 0]
+        cat_col_ra, cat_col_dec = guess_catalogue_radec_columns(cat_filtered)
+        sr_ast = fwhm * pixscale
+        n_cur, med_cur = _wcs_match_count(
+            obj, cat_filtered, wcs, sr_ast, cat_col_ra, cat_col_dec
+        )
+        log(f"Current WCS: {_fmt_match_stats(n_cur, med_cur)} within {sr_ast * 3600:.1f} arcsec")
 
-        # FIXME: make the order configurable
-        wcs1 = pipeline.refine_astrometry(obj_ast, cat_filtered, fwhm*pixscale,
-                                          wcs=wcs, order=3, method='scamp',
-                                          cat_col_mag=config.get('cat_col_mag'),
-                                          cat_col_mag_err=config.get('cat_col_mag_err'),
-                                          verbose=verbose,
-                                          _tmpdir=settings.STDPIPE_TMPDIR,
-                                          _exe=settings.STDPIPE_SCAMP)
-        if wcs1 is None or not wcs1.is_celestial:
-            log("Warning: WCS refinement failed (SCAMP chi2 too high or no convergence). "
-                "Continuing with existing WCS from blind match.")
+        wcs_fits = None
+        try:
+            wcs_fits = WCS(fits.getheader(filename, -1), naxis=2)
+        except Exception:
+            wcs_fits = None
+        n_fits, med_fits = _wcs_match_count(
+            obj, cat_filtered, wcs_fits, sr_ast, cat_col_ra, cat_col_dec
+        )
+        if wcs_fits is not None and getattr(wcs_fits, 'is_celestial', False):
+            log(f"FITS header WCS: {_fmt_match_stats(n_fits, med_fits)} within {sr_ast * 3600:.1f} arcsec")
+            header_better = n_fits > n_cur and (
+                n_cur < 15 or n_fits >= 2 * max(n_cur, 1)
+            )
+            if header_better:
+                log("FITS header WCS matches the catalogue better — using it as baseline")
+                wcs = wcs_fits
+                n_cur, med_cur = n_fits, med_fits
+                obj['ra'], obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+
+        skip_scamp = n_cur >= 30 and med_cur is not None and med_cur < 0.5
+        wcs1 = None
+        if skip_scamp:
+            log("Original WCS already has a dense, tight catalogue match — "
+                "skipping SCAMP to avoid a degenerate re-fit")
         else:
-            wcs = wcs1
-            obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
-            astrometry.store_wcs(os.path.join(basepath, "image.wcs"), wcs)
-            astrometry.clear_wcs(header)
-            header += wcs.to_header(relax=True)
-            config['refine_wcs'] = False
-            log("Refined WCS stored to file:image.wcs")
-
-            # Save field centre of the (possibly refined) WCS for API consumers
-            if wcs and wcs.is_celestial:
-                ra_cen, dec_cen, sr_cen = astrometry.get_frame_center(
-                    wcs=wcs, width=image.shape[1], height=image.shape[0]
+            obj_ast = obj[(obj['flags'] & 0x800) == 0]
+            wcs1 = pipeline.refine_astrometry(
+                obj_ast, cat_filtered, sr_ast,
+                wcs=wcs, order=3, method='scamp',
+                cat_col_mag=config.get('cat_col_mag'),
+                cat_col_mag_err=config.get('cat_col_mag_err'),
+                verbose=verbose,
+                _tmpdir=settings.STDPIPE_TMPDIR,
+                _exe=settings.STDPIPE_SCAMP,
+            )
+            if wcs1 is None or not getattr(wcs1, 'is_celestial', False):
+                log("Warning: WCS refinement failed (SCAMP chi2 too high or no convergence). "
+                    "Continuing with existing WCS.")
+                wcs1 = None
+            else:
+                n_new, med_new = _wcs_match_count(
+                    obj, cat_filtered, wcs1, sr_ast, cat_col_ra, cat_col_dec
                 )
-                config['field_ra'] = float(ra_cen)
-                config['field_dec'] = float(dec_cen)
-                config['field_sr'] = float(sr_cen)
+                log(f"SCAMP WCS: {_fmt_match_stats(n_new, med_new)} within {sr_ast * 3600:.1f} arcsec")
+                degenerate = n_new < 15 or (n_cur >= 15 and n_new < 0.5 * n_cur)
+                if degenerate:
+                    log("Warning: SCAMP solution is degenerate or worse than the original WCS — keeping the original")
+                    wcs1 = None
+
+        if wcs1 is not None:
+            wcs = wcs1
+            log("Refined WCS stored to file:image.wcs")
+        else:
+            wcs = _wcs_as_tpv(
+                wcs, obj=obj, cat=cat_filtered, sr_deg=sr_ast,
+                cat_col_ra=cat_col_ra, cat_col_dec=cat_col_dec, log=log,
+            )
+            log("Original WCS kept (stored to file:image.wcs)")
+
+        obj['ra'], obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+        astrometry.store_wcs(os.path.join(basepath, "image.wcs"), wcs)
+        astrometry.clear_wcs(header)
+        header += wcs.to_header(relax=True)
+        config['refine_wcs'] = False
+        if wcs and wcs.is_celestial:
+            ra_cen, dec_cen, sr_cen = astrometry.get_frame_center(
+                wcs=wcs, width=image.shape[1], height=image.shape[0]
+            )
+            config['field_ra'] = float(ra_cen)
+            config['field_dec'] = float(dec_cen)
+            config['field_sr'] = float(sr_cen)
 
     log("\n---- Photometric calibration ----\n")
 
