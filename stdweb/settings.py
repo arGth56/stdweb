@@ -216,6 +216,16 @@ EMAIL_USE_SSL = config('EMAIL_USE_SSL', default=False, cast=bool)
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='stdweb@stdweb.org.uk')
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
+# Cloudflare Turnstile (captcha for the public telegram subscription form).
+# Defaults are Cloudflare's official *test* keys (always pass) so the form works
+# out of the box; set real keys in .env for production bot protection.
+TURNSTILE_SITE_KEY = config('TURNSTILE_SITE_KEY', default='1x00000000000000000000AA')
+TURNSTILE_SECRET_KEY = config('TURNSTILE_SECRET_KEY', default='1x0000000000000000000000000000000AA')
+# Comma-separated frontend hostnames a Turnstile token must be solved on (the
+# siteverify 'hostname' allowlist). Leave empty to fall back to the request host
+# (already constrained by ALLOWED_HOSTS). Never list localhost/127.0.0.1 in prod.
+TURNSTILE_HOSTNAMES = config('TURNSTILE_HOSTNAMES', default='')
+
 # Paths for STDWeb
 DATA_PATH = config('DATA_PATH', default='data/')
 TASKS_PATH = config('TASKS_PATH', default='tasks/')

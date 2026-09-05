@@ -147,6 +147,40 @@ def task_photometry(self, id, finalize=True):
 
 
 @shared_task(bind=True)
+def task_notify_subscribers(self, notice_id):
+    """Email every telegram subscriber that a new telegram has been published."""
+    from django.conf import settings
+    from django.core.mail import EmailMessage, get_connection
+    from . import telegram as tg
+
+    try:
+        notice = models.TelegramNotice.objects.select_related(
+            'point', 'point__task', 'user',
+        ).get(id=notice_id)
+    except models.TelegramNotice.DoesNotExist:
+        return
+
+    subscribers = list(models.TelegramSubscriber.objects.all())
+    if not subscribers:
+        return
+
+    base = tg.public_base(None)  # no request in a worker: uses SITE_PUBLIC_BASE_URL
+    sent = 0
+    connection = get_connection(fail_silently=True)
+    for sub in subscribers:
+        try:
+            subject, body = tg.telegram_notification(notice, sub, base)
+            EmailMessage(
+                subject, body, settings.DEFAULT_FROM_EMAIL, [sub.email],
+                connection=connection,
+            ).send(fail_silently=True)
+            sent += 1
+        except Exception:
+            continue
+    return sent
+
+
+@shared_task(bind=True)
 def task_transients_simple(self, id, finalize=True):
     task = models.Task.objects.get(id=id)
     basepath = task.path()
