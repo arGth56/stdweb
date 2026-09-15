@@ -1,4 +1,5 @@
 {% extends "template.html" %}
+{% load filters %}
 
 {% block ptitle %}{{ obj.object_name }} : Telegram : STDWeb{% endblock %}
 {% block title %}{{ obj.object_name }}{% endblock %}
@@ -15,11 +16,35 @@
 
   <h2 class="h6 text-uppercase text-muted mt-4">Measure</h2>
   <p>
-    {{ obj.time }} UT · MJD {{ obj.mjd|floatformat:5 }} ·
-    <strong>{{ obj.filt }} = {{ obj.mag_s }}</strong>
+    {{ obj.time }} UT · MJD {{ obj.mjd|floatformat:5 }}
     {% if obj.is_diff %} <span class="text-muted">(difference image)</span>{% endif %}
     · {{ obj.observer }}
   </p>
+  {% with p=obj.photometry %}
+    {% if p.has_colorcomp and p.compensated_this %}
+      <p class="mb-1">
+        <strong>Gaia {{ p.band }} = {{ p.compensated_this.mag|floatformat:3 }} ± {{ p.compensated_this.magerr|floatformat:3 }}</strong>
+        <span class="text-muted">(colour-compensated)</span>
+      </p>
+      <p class="mb-1 text-muted small">
+        Colour-free (STDWeb calibration): {{ p.compensated_this.mag_cal|floatformat:3 }} ± {{ p.compensated_this.magerr_cal|floatformat:3 }}
+        · (BP − RP)<sub>target</sub> = {{ p.target_colour.value|floatformat:2 }} ± {{ p.target_colour.err|floatformat:2 }}
+      </p>
+      {% if p.compensated_all %}
+        <p class="mb-0 small text-muted">
+          All bands compensated:
+          {% for b in "G,BP,RP"|split:"," %}{% with d=p.compensated_all|get_item:b %}
+            {% if d %}{{ b }} = {{ d.mag|floatformat:2 }} ± {{ d.magerr|floatformat:2 }}{% if not forloop.last %} · {% endif %}{% endif %}
+          {% endwith %}{% endfor %}
+        </p>
+      {% endif %}
+    {% else %}
+      <p class="mb-1"><strong>{{ p.filt_label }} = {{ obj.mag_s }}</strong></p>
+      {% if p.k != None %}
+        <p class="mb-0 small text-muted">Calibration colour term k = {{ p.k|floatformat:3 }}{% if p.color_name %} ({{ p.color_name }}){% endif %} — target colour not applied.</p>
+      {% endif %}
+    {% endif %}
+  {% endwith %}
 
   <h2 class="h6 text-uppercase text-muted mt-4">Links</h2>
   <p>

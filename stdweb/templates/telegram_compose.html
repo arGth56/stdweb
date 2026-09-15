@@ -15,6 +15,7 @@
 
   <div class="row g-4">
     <div class="col-lg-7">
+      {% include "telegram_photometry_panel.html" %}
       <form method="post" action="{% url 'telegram_compose' task.id %}">
         {% csrf_token %}
         <div class="mb-3">
@@ -41,7 +42,13 @@
           <input type="hidden" name="alert_kind" value="{{ alert_kind }}">
         </div>
         <p class="small text-muted">
-          Measure: <strong>{{ mag_s }} {{ point.filt }}</strong>
+          {% if photometry.has_colorcomp and photometry.compensated_this %}
+            Measure: <strong>Gaia {{ photometry.band }} = {{ photometry.compensated_this.mag|floatformat:3 }} ± {{ photometry.compensated_this.magerr|floatformat:3 }}</strong> (colour-compensated)
+            · colour-free {{ photometry.mag_stdweb|floatformat:3 }} ± {{ photometry.magerr_stdweb|floatformat:3 }}
+          {% else %}
+            Measure: <strong>{{ mag_s }} {{ photometry.filt_label }}</strong>
+            {% if photometry.k != None %} · k = {{ photometry.k|floatformat:3 }}{% endif %}
+          {% endif %}
           · {{ observer }}
           · <a href="{{ task_url }}">{{ task_url }}</a>
         </p>

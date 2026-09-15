@@ -44,6 +44,7 @@ def _decorate(notice, request):
             else 'Alert'
         ),
         'mag_s': tg.mag_string(point),
+        'photometry': tg.photometry_context(point.task, point, with_desc=False),
         'filt': point.filt,
         'time': (point.time_iso or '')[:19],
         'mjd': point.mjd,
@@ -318,6 +319,7 @@ def compose(request, id):
         'has_cutout': has_cutout,
         'cutout_url': reverse('telegram_task_cutout', kwargs={'id': task.id}),
         'mag_s': tg.mag_string(point),
+        'photometry': tg.photometry_context(task, point, with_desc=True, with_sisters=True),
         'observer': tg.observer_line(task.user),
         'task_url': tg.task_url(request, task.id),
         'existing': existing,
