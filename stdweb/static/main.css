@@ -97,6 +97,23 @@
     margin-bottom: .5rem;
 }
 
+/* Colour-correction help: scrollable modal, readable on small screens */
+.colorcomp-help-body {
+    font-size: 0.95rem;
+    line-height: 1.45;
+}
+.colorcomp-help-body h6 {
+    margin-top: 1rem;
+    margin-bottom: 0.35rem;
+    font-size: 0.95rem;
+}
+.colorcomp-help-body h6:first-of-type {
+    margin-top: 0;
+}
+.colorcomp-why-figure img {
+    min-height: 120px;
+}
+
 .navbar .navbar-brand {
     /* text-shadow: 2px 2px 4px #000000, 2px 2px 6px #ffffff; */
     background-color: #565656;

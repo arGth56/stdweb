@@ -23,6 +23,64 @@ from . import celery
 from . import processing
 from . import lightcurve
 from . import alerts
+from . import colorcomp
+
+
+def _color_window(value):
+    try:
+        w = float(value)
+        if 1 <= w <= 24 * 60:
+            return w
+    except (TypeError, ValueError):
+        pass
+    return colorcomp.DEFAULT_WINDOW_MIN
+
+
+def _color_compensate(request, task, id):
+    """POST action: validate the chosen G/BP/RP triplet and, only if every rule passes,
+    compute and store the colour-compensated photometry."""
+    if not (request.user.is_authenticated and (request.user.is_staff or request.user == task.user)):
+        messages.error(request, 'Only the observer can compute colour-compensated photometry for this task.')
+        return HttpResponseRedirect(request.path_info)
+
+    mode = request.POST.get('color_mode') or 'direct'
+    window = _color_window(request.POST.get('color_window'))
+    ids = {b: request.POST.get(f'color_{b.lower()}') for b in colorcomp.BANDS}
+    back = f"{request.path_info}?color_mode={mode}&color_window={window:g}#colorcomp"
+
+    ok, reasons, descs = colorcomp.validate_triplet(ids, mode, window)
+    if not ok:
+        for reason in reasons:
+            messages.error(request, f'Colour compensation refused — {reason}')
+        return HttpResponseRedirect(back)
+
+    result = colorcomp.compensate(descs, mode, window, user=request.user)
+    colorcomp.save_result(result)
+    messages.success(
+        request,
+        f"Colour-compensated photometry computed from tasks "
+        f"{result['task_ids']['G']} (G) / {result['task_ids']['BP']} (BP) / {result['task_ids']['RP']} (RP)."
+    )
+    return HttpResponseRedirect(back)
+
+
+def color_help(request):
+    """Standalone explanation page for colour correction (linked from the task block)."""
+    return TemplateResponse(request, 'color_help.html', {
+        'window_min': colorcomp.DEFAULT_WINDOW_MIN,
+        'match_arcsec': colorcomp.MATCH_ARCSEC,
+    })
+
+
+def task_color_csv(request, id, mode='direct'):
+    task = models.Task.objects.get(id=id)
+    result = colorcomp.load_result(task, mode)
+    if result is None:
+        return HttpResponse('No colour-compensated photometry for this task.', status=404, content_type='text/plain')
+    response = HttpResponse(colorcomp.result_csv(result), content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="task{id}_color_{mode}.csv"'
+    return response
+
 
 def tasks(request, id=None):
     context = {}
@@ -65,6 +123,8 @@ def tasks(request, id=None):
                     return HttpResponseRedirect(request.path_info)
                 messages.success(request, 'Removed this measurement from Telegram.')
                 return HttpResponseRedirect(request.path_info)
+            if action == 'color_compensate':
+                return _color_compensate(request, task, id)
 
         all_forms = {}
 
@@ -226,6 +286,21 @@ def tasks(request, id=None):
 
         # Photometry quality warnings (stored in config by check_photometry_quality)
         context['photometry_warnings'] = task.config.get('photometry_warnings', [])
+
+        # Colour-compensated photometry from G/BP/RP sister tasks
+        try:
+            manual_ids = {b: request.GET.get(f'color_{b.lower()}') for b in colorcomp.BANDS}
+            if not any(manual_ids.values()):
+                manual_ids = None
+            context['colorcomp'] = colorcomp.build_panel(
+                task,
+                mode=request.GET.get('color_mode'),
+                window_min=_color_window(request.GET.get('color_window')),
+                manual_ids=manual_ids,
+            )
+        except Exception as exc:
+            context['colorcomp'] = None
+            context['colorcomp_error'] = f'{type(exc).__name__}: {exc}'
 
         ra = task.config.get('target_ra')
         dec = task.config.get('target_dec')

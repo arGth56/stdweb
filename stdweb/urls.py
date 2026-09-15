@@ -101,6 +101,8 @@ urlpatterns = [
     path('tasks/<int:id>/candidates', views_tasks.task_candidates, name='task_candidates'),
 
     path('tasks/<int:id>/mask', views_tasks.task_mask, name='task_mask'),
+    path('tasks/<int:id>/color/<str:mode>.csv', views_tasks.task_color_csv, name='task_color_csv'),
+    path('help/color-correction', views_tasks.color_help, name='color_help'),
     path('tasks/<int:id>/state', views_tasks.task_state, name='task_state'),
 
     path('skyportal/', views_skyportal.skyportal, name='skyportal'),

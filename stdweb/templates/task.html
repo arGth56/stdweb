@@ -648,6 +648,13 @@
       </div>
     {% endif %}
 
+    <!-- Colour-compensated photometry from G/BP/RP sister tasks -->
+    {% if colorcomp %}
+      {% include "task_block_colorcomp.html" %}
+    {% elif colorcomp_error %}
+      <div class="alert alert-secondary small">Colour-compensated photometry unavailable: {{ colorcomp_error }}</div>
+    {% endif %}
+
     <!-- Target cutout -->
     {% if target_cutouts %}
       {% if perms.stdweb.skyportal_upload and settings.SKYPORTAL_TOKEN %}
