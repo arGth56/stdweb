@@ -65,7 +65,7 @@
       <div class="list-group mb-4">
           {% for task in tasks %}
             <div class="list-group-item list-group-item-action d-flex justify-content-between align-items-start{% if task.archived %} bg-light text-muted{% endif %}">
-                <div class="ms-1 me-2 d-flex flex-column align-items-center">
+                <div class="ms-1 me-2 d-flex flex-column align-items-center flex-shrink-0" style="width: 3.5em">
                   {% if task.user == request.user or request.user.is_staff %}
                     <input class="form-check-input task-select mb-1" type="checkbox" name="task_ids" value="{{ task.id }}"
                            data-unprocessed="{% if task.state == 'uploaded' or task.state == 'inspect_done' or 'inspect' in task.state and 'failed' in task.state or 'photometry_failed' == task.state or task.state == 'failed' %}1{% else %}0{% endif %}">
