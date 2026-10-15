@@ -954,8 +954,8 @@ def inspect_image(filename, config, verbose=True, show=False):
     img_median = np.nanmedian(image)
 
     # A saturation level close to the sky flags every star as saturated. This happens with raw-ADU
-    # values on calibrated images (<= 2x a positive sky), and with DATAMAX holding display cuts
-    # (e.g. PRISM) on images with a negative background, where a 2x-median test cannot work.
+    # values on calibrated images (<= 2x a positive sky), and on images with a negative
+    # background, where a 2x-median test cannot work.
     def _implausible_saturation(satlevel):
         if satlevel <= 0 or satlevel <= img_median:
             return f"is not above the sky median ({img_median:.0f})"
@@ -975,10 +975,8 @@ def inspect_image(filename, config, verbose=True, show=False):
             config.pop('saturation', None)
 
     if not config.get('saturation'):
-        satlevel = header.get(
-            'SATURATE',
-            header.get('DATAMAX')
-        )
+        # DATAMAX is the maximum data value, not saturation (PRISM writes display cuts there)
+        satlevel = header.get('SATURATE')
 
         if satlevel:
             reason = _implausible_saturation(satlevel)
