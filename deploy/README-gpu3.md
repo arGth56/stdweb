@@ -64,6 +64,36 @@ Current gpu-3 state (2026-08): **`TASKS_PATH=/var/lib/stdweb/tasks`** (~94 MB); 
 tail -f ~/var/log/stdweb/gunicorn.log ~/var/log/stdweb/celery.log
 ```
 
+## Beta (test before production)
+
+Beta is a **second code tree** on gpu-3. It shares the prod venv, SQLite DB, and `TASKS_PATH`, so task 4850 is visible. It does **not** share the gunicorn on `:8000`.
+
+| | Prod | Beta |
+|--|------|------|
+| code | `/var/www/stdweb` | `/var/www/stdweb-beta` |
+| gunicorn | `127.0.0.1:8000` | `127.0.0.1:8002` |
+| DEBUG | False | True |
+| static | `/var/lib/stdweb/static` | `/var/lib/stdweb-beta/static` |
+
+From this laptop:
+
+```bash
+bash deploy/rsync-to-beta.sh
+ssh -L 8002:127.0.0.1:8002 pyl@192.168.1.107
+# browser: http://127.0.0.1:8002/
+```
+
+Do **not** rsync onto `/var/www/stdweb` until that looks right. Then:
+
+```bash
+# production (after beta is OK)
+cd /home/pyl/repo/stdweb/stdweb && rsync -avR … pyl@192.168.1.107:/var/www/stdweb/stdweb/
+ssh pyl@192.168.1.107 'cd /var/www/stdweb && .venv/bin/python manage.py migrate --noinput && .venv/bin/python manage.py collectstatic --noinput'
+kill -HUP $(ssh pyl@192.168.1.107 'systemctl show -p MainPID --value stdweb-gunicorn')
+```
+
+Optional public hostname: add a Cloudflare tunnel route `beta.stdweb.org.uk` → `http://localhost:8002`.
+
 ## Astro binaries
 
 Pipeline needs `solve-field`, `sex`, `hotpants`, etc. Install on gpu-3 separately (not automated yet).
