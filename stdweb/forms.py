@@ -82,6 +82,7 @@ class UploadFileForm(forms.Form):
 class TasksFilterForm(forms.Form):
     query = forms.CharField(max_length=100, required=False, label="Filter Tasks")
     show_all = forms.BooleanField(initial=False, required=False, label="Show all")
+    show_archived = forms.BooleanField(initial=False, required=False, label="Show archived")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -93,12 +94,16 @@ class TasksFilterForm(forms.Form):
             Row(
                 Column(
                     InlineField(
-                        PrependedText('query', 'Filter:', placeholder='Search tasks by filenames or titles or usernames'),
+                        PrependedText('query', 'Filter:', placeholder='Search by filename, title, user, target, filter or date (e.g. 2026-10-14)'),
                     ),
                     css_class="col-md"
                 ),
                 Column(
                     InlineField('show_all'),
+                    css_class="col-md-auto mt-2"
+                ),
+                Column(
+                    InlineField('show_archived'),
                     css_class="col-md-auto mt-2"
                 ),
             )

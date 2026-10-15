@@ -372,6 +372,25 @@ def tasks(request, id=None):
         if not request.user.is_authenticated:
             return redirect_to_login(request.path)
 
+        if request.method == 'POST':
+            action = request.POST.get('action')
+            if action in ('archive', 'unarchive'):
+                ids = [int(_) for _ in request.POST.getlist('task_ids') if _.isdigit()]
+                selected = models.Task.objects.filter(id__in=ids)
+                if not request.user.is_staff:
+                    selected = selected.filter(user=request.user)
+                # A running chain saves its own copy of the task and would revert the flag
+                busy = selected.exclude(celery_id=None).exclude(celery_id='')
+                n = selected.filter(Q(celery_id=None) | Q(celery_id='')).update(archived=(action == 'archive'))
+                if n:
+                    messages.success(request, f"{n} task(s) {action}d")
+                if busy.exists():
+                    messages.warning(request, "Running tasks were left unchanged: " +
+                                     ", ".join(str(_) for _ in busy.values_list('id', flat=True)))
+                if len(ids) > n + busy.count():
+                    messages.error(request, "You may only archive your own tasks")
+            return HttpResponseRedirect(request.get_full_path())
+
         # List all tasks
         tasks = models.Task.objects.all()
         tasks = tasks.order_by('-created')
@@ -386,6 +405,9 @@ def tasks(request, id=None):
                     if request.user.is_authenticated:
                         tasks = tasks.filter(user = request.user)
 
+                if not form.cleaned_data.get('show_archived'):
+                    tasks = tasks.filter(archived=False)
+
                 query = form.cleaned_data.get('query')
                 if query:
                     for token in query.split():
@@ -393,7 +415,10 @@ def tasks(request, id=None):
                                              Q(title__icontains = token) |
                                              Q(user__username__icontains = token) |
                                              Q(user__first_name__icontains = token) |
-                                             Q(user__last_name__icontains = token)
+                                             Q(user__last_name__icontains = token) |
+                                             Q(config__target__icontains = token) |
+                                             Q(config__filter__iexact = token) |
+                                             Q(config__time__startswith = token)
                                              )
 
 

@@ -12,9 +12,27 @@
   <script language="javascript">
    // Submit the form on changing the checkbox
    $(function(){
-     $('#id_show_all').on('change', function(){
+     $('#id_show_all, #id_show_archived').on('change', function(){
        $(this).closest('form').submit();
      });
+
+     function update_buttons(){
+       var n = $('.task-select:checked').length;
+       $('.task-bulk').prop('disabled', n == 0);
+       $('#task-selected-count').text(n ? n + ' selected' : '');
+     }
+     $('.task-select').on('change', update_buttons);
+     $('#task-select-all').on('change', function(){
+       $('.task-select').prop('checked', $(this).prop('checked'));
+       update_buttons();
+     });
+     $('#task-select-unprocessed').on('click', function(){
+       $('.task-select').each(function(){
+         $(this).prop('checked', $(this).data('unprocessed') == 1);
+       });
+       update_buttons();
+     });
+     update_buttons();
    });
 
   </script>
@@ -30,37 +48,72 @@
 
     {% paginate 10 tasks %}
 
-    <div class="list-group mb-4">
-        {% for task in tasks %}
-          <a href="{% url 'tasks' id=task.id %}" class="text-decoration-none list-group-item list-group-item-action d-flex justify-content-between align-items-start">
-              <div class="ms-1 me-2">
-                {{ task.id }}
-              </div>
-              <div class="ms-2 me-auto">
-                <div class="fw-bold">{{ task.original_name }}</div>
+    <form method="POST">
+      {% csrf_token %}
 
-                {% if task.title %}
-                  <div class="fst-italic">{{ task.title }}</div>
-                {% endif %}
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <input class="form-check-input mt-0" type="checkbox" id="task-select-all" title="Select all your tasks on this page">
+        <label class="form-check-label small" for="task-select-all">All</label>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="task-select-unprocessed"
+                title="Select your tasks on this page without successful photometry">Select without photometry</button>
+        <button type="submit" name="action" value="archive" class="btn btn-sm btn-outline-secondary task-bulk"
+                title="Hide the selected tasks from the list; nothing is deleted">Archive</button>
+        <button type="submit" name="action" value="unarchive" class="btn btn-sm btn-outline-secondary task-bulk">Unarchive</button>
+        <small class="text-muted" id="task-selected-count"></small>
+      </div>
 
-                <div>
-                {% if task.config.target_ra or task.config.target_dec %}
-                  Target: <span class="fw-bold">{{ task.config.target_ra|to_sexadecimal_hours }} {{ task.config.target_dec|to_sexadecimal_plus }}</span>
-                {% endif %}
-
-                {% if task.config.mag_limit %}
-                  Detection limit: <span class="fw-bold">{{ task.config.mag_limit|floatformat:2 }}</span>
-                {% endif %}
+      <div class="list-group mb-4">
+          {% for task in tasks %}
+            <div class="list-group-item list-group-item-action d-flex justify-content-between align-items-start{% if task.archived %} bg-light text-muted{% endif %}">
+                <div class="ms-1 me-2 d-flex flex-column align-items-center">
+                  {% if task.user == request.user or request.user.is_staff %}
+                    <input class="form-check-input task-select mb-1" type="checkbox" name="task_ids" value="{{ task.id }}"
+                           data-unprocessed="{% if task.state == 'uploaded' or task.state == 'inspect_done' or 'inspect' in task.state and 'failed' in task.state or 'photometry_failed' == task.state or task.state == 'failed' %}1{% else %}0{% endif %}">
+                  {% endif %}
+                  <a href="{% url 'tasks' id=task.id %}" class="text-decoration-none">{{ task.id }}</a>
                 </div>
+                <a href="{% url 'tasks' id=task.id %}" class="text-decoration-none text-reset ms-2 me-auto">
+                  <div class="fw-bold">{{ task.original_name }}</div>
 
-                <small class="me-2 badge bg-info">{{ task.user|user }}</small>
-                <small class="me-2">Created: <span class="fst-italic">{{ task.created|timestamp }}</span></small>
-                <small class="me-2">Modified: <span class="fst-italic">{{ task.modified|timestamp }}</span></small>
-              </div>
-              <span class="badge bg-{% if 'failed' in task.state %}danger{% else %}primary{% endif %} rounded-pill">{{ task.state }}</span>
-          </a>
-        {% endfor %}
-    </div>
+                  {% if task.title %}
+                    <div class="fst-italic">{{ task.title }}</div>
+                  {% endif %}
+
+                  <div>
+                  {% if task.config.target %}
+                    Target: <span class="fw-bold">{{ task.config.target|first_line }}</span>
+                  {% endif %}
+                  {% if task.config.target_ra or task.config.target_dec %}
+                    <span class="{% if task.config.target %}text-muted{% else %}fw-bold{% endif %}">{% if not task.config.target %}Target: {% endif %}{{ task.config.target_ra|to_sexadecimal_hours }} {{ task.config.target_dec|to_sexadecimal_plus }}</span>
+                  {% endif %}
+                  {% if task.config.filter %}
+                    <span class="ms-2">Filter: <span class="fw-bold">{{ task.config.filter }}</span></span>
+                  {% endif %}
+                  {% if task.config.time %}
+                    <span class="ms-2">Obs: <span class="fw-bold">{{ task.config.time|slice:":16" }} UTC</span></span>
+                  {% endif %}
+                  </div>
+
+                  <div>
+                  {% if task.config.mag_limit %}
+                    Detection limit: <span class="fw-bold">{{ task.config.mag_limit|floatformat:2 }}</span>
+                  {% endif %}
+                  </div>
+
+                  <small class="me-2 badge bg-info">{{ task.user|user }}</small>
+                  <small class="me-2">Created: <span class="fst-italic">{{ task.created|timestamp }}</span></small>
+                  <small class="me-2">Modified: <span class="fst-italic">{{ task.modified|timestamp }}</span></small>
+                </a>
+                <div class="d-flex flex-column align-items-end gap-1">
+                  <span class="badge bg-{% if 'failed' in task.state %}danger{% else %}primary{% endif %} rounded-pill">{{ task.state }}</span>
+                  {% if task.archived %}
+                    <span class="badge bg-secondary rounded-pill">archived</span>
+                  {% endif %}
+                </div>
+            </div>
+          {% endfor %}
+      </div>
+    </form>
 
     {% show_pages %}
 

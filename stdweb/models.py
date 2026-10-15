@@ -27,6 +27,8 @@ class Task(models.Model):
 
     config = models.JSONField(default=dict, blank=True) #
 
+    archived = models.BooleanField(default=False, db_index=True) # Hidden from the task list unless requested
+
     def path(self):
         return os.path.join(settings.TASKS_PATH, str(self.id))
 

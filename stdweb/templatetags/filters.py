@@ -105,6 +105,12 @@ def split(value, sep=','):
 
 
 @register.filter
+def first_line(value):
+    lines = str(value or '').strip().splitlines()
+    return lines[0].strip() if lines else ''
+
+
+@register.filter
 def get_item(value, key):
     """Dictionary lookup with a variable key: {{ mydict|get_item:band }}."""
     try:
