@@ -28,7 +28,7 @@ def telegram_slash(request):
     return HttpResponsePermanentRedirect(url)
 
 
-def _decorate(notice, request):
+def _decorate(notice, request, with_desc=False):
     point = notice.point
     task_id = point.task_id
     return {
@@ -44,7 +44,7 @@ def _decorate(notice, request):
             else 'Alert'
         ),
         'mag_s': tg.mag_string(point),
-        'photometry': tg.photometry_context(point.task, point, with_desc=False),
+        'photometry': tg.photometry_context(point.task, point, with_desc=with_desc),
         'filt': point.filt,
         'time': (point.time_iso or '')[:19],
         'mjd': point.mjd,
@@ -179,7 +179,7 @@ def detail(request, pk):
         pk=pk,
     )
     return TemplateResponse(request, 'lightcurve/telegram_object.html', {
-        'obj': _decorate(notice, request),
+        'obj': _decorate(notice, request, with_desc=True),
         'notice': notice,
     })
 

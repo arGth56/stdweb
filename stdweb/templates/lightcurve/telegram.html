@@ -59,12 +59,18 @@
         </thead>
         <tbody>
           {% for o in objects %}
+            {% with h=o.photometry.headline %}
             <tr>
               <td><a href="{{ o.url }}">{{ o.object_name }}</a></td>
-              <td>{{ o.mag_s }} <span class="text-muted">{{ o.filt }}</span></td>
+              <td>
+                <span class="text-muted">{{ h.label }} =</span>
+                <strong{% if h.is_true %} class="text-success"{% endif %}>{{ h.value }}</strong>
+                {% if h.is_true %}<span class="badge text-bg-success ms-1">true</span>{% endif %}
+              </td>
               <td class="font-monospace">{{ o.time }}</td>
               <td>{{ o.observer }}</td>
             </tr>
+            {% endwith %}
           {% endfor %}
         </tbody>
       </table>

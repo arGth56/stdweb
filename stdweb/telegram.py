@@ -99,6 +99,68 @@ def _format_color_name(name):
     return s or 'BP − RP'
 
 
+def _obs_time_ut(time_iso):
+    if not time_iso:
+        return 'unknown time'
+    return str(time_iso)[:19].replace('T', ' ') + ' UT'
+
+
+def _signed_num(value, prec=3):
+    x = _finite(value)
+    if x is None:
+        return '?'
+    return f'{x:+.{prec}f}'.replace('-', '−')
+
+
+def colorcomp_steps(band, d, col, color_name=''):
+    """Structured colour-compensation facts for templates and telegrams."""
+    cname = _format_color_name(color_name)
+    k_str = _signed_num(d.get('k'))
+    col_str = f'{col["value"]:.2f} ± {col["err"]:.2f}'
+    return {
+        'band': band,
+        'mag_cal': d['mag_cal'],
+        'magerr_cal': d['magerr_cal'],
+        'k': d.get('k'),
+        'k_str': k_str,
+        'color_name': cname,
+        'obs_time': _obs_time_ut(d.get('time_iso')),
+        'task_id': d.get('task_id'),
+        'target_colour': col_str,
+        'correction': d.get('correction'),
+        'correction_str': _signed_num(d.get('correction')),
+        'mag_true': d['mag'],
+        'magerr_true': d['magerr'],
+        'equation': (
+            f'Gaia {band} = {d["mag_cal"]:.3f} + ({k_str}) × (BP−RP = {col_str})'
+            f' = {d["mag"]:.3f} ± {d["magerr"]:.3f} mag'
+        ),
+    }
+
+
+def colorcomp_measure_lines(band, d, col, color_name='', triplet_ids=None, mode_label=''):
+    """Three-step colour compensation text for telegram bodies."""
+    s = colorcomp_steps(band, d, col, color_name=color_name)
+    lines = [
+        (
+            f'(1) Calibrated magnitude (mag_cal): Gaia {band} = {s["mag_cal"]:.3f} ± {s["magerr_cal"]:.3f} mag'
+            f' — as on the STDWeb task page; target colour not applied.'
+        ),
+        (
+            f'(2) Colour term measured on this exposure: k = {s["k_str"]}'
+            f' ({s["color_name"]} of field stars), from photometric calibration of task {s["task_id"]}'
+            f' ({s["obs_time"]}).'
+        ),
+        '(3) Estimated true Gaia magnitude:',
+        f'    {s["equation"]}',
+    ]
+    if triplet_ids:
+        lines.append(
+            f'    Triplet tasks {triplet_ids["G"]} (G) / {triplet_ids["BP"]} (BP) / {triplet_ids["RP"]} (RP), {mode_label}.'
+        )
+    return lines
+
+
 def _read_target_photometry(task, is_diff):
     """Colour term and filter from the same VOT file as the published measurement."""
     from astropy.table import Table
@@ -140,6 +202,9 @@ def photometry_context(task, point, with_desc=True, with_sisters=False):
     """
     mode = 'sub' if point.is_diff else 'direct'
     cc = colorcomp.load_result(task, mode)
+    # Reading the target VOT is only needed for the detailed (compose/detail) path.
+    # Keep list rendering cheap: skip it unless callers ask for descriptions.
+    target_ph = _read_target_photometry(task, point.is_diff) if with_desc else None
 
     # Band from the stored triplet mapping first (no file access).
     band = None
@@ -152,6 +217,8 @@ def photometry_context(task, point, with_desc=True, with_sisters=False):
     desc = colorcomp.describe(task, mode) if with_desc else None
     if band is None and desc is not None:
         band = desc.get('band')
+    if band is None and target_ph is not None:
+        band = target_ph.get('band')
 
     sisters = None
     if with_sisters and cc is None and desc is not None and band:
@@ -162,21 +229,66 @@ def photometry_context(task, point, with_desc=True, with_sisters=False):
         compensated_this = cc['bands'][band]
         compensated_all = cc['bands']
 
+    target_colour = cc.get('colour') if cc else None
+    steps = None
+    if compensated_this and target_colour and band:
+        steps = colorcomp_steps(
+            band, compensated_this, target_colour,
+            color_name=(desc or {}).get('color_name', ''),
+        )
+
+    k = (desc or target_ph or {}).get('k')
+    color_name = (desc or target_ph or {}).get('color_name') or ''
+    config = task.config or {}
+    color_term_used = config.get('use_color') is not False and _finite(k) is not None
+
+    filt_label = _filt_label(band, point.filt, (desc or target_ph or {}).get('filter_name'))
+
+    # Single "published measure" headline, harmonised across all telegram types so
+    # the eye always lands on the same block first.
+    if steps:
+        headline = {
+            'label': f'Gaia {steps["band"]}',
+            'value': f'{steps["mag_true"]:.3f} ± {steps["magerr_true"]:.3f}',
+            'note': 'true magnitude (colour-compensated)',
+            'is_true': True,
+        }
+    elif point.is_detection and point.mag is not None:
+        note = ('calibrated; target colour not applied' if color_term_used
+                else 'calibrated; no colour term used')
+        headline = {
+            'label': filt_label,
+            'value': mag_string(point),
+            'note': note,
+            'is_true': False,
+        }
+    else:
+        headline = {
+            'label': filt_label,
+            'value': mag_string(point),
+            'note': 'upper limit' if point.mag_limit is not None else '',
+            'is_true': False,
+        }
+
     return {
-        'filt_label': _filt_label(band, point.filt, (desc or {}).get('filter_name')),
+        'filt_label': filt_label,
         'band': band,
+        'headline': headline,
         'mag_stdweb': point.mag,
         'magerr_stdweb': point.magerr,
         'mag_limit': point.mag_limit,
         'is_detection': point.is_detection,
-        'k': (desc or {}).get('k'),
-        'color_name': (desc or {}).get('color_name'),
+        'k': k if color_term_used else None,
+        'color_name': color_name,
+        'color_term_used': color_term_used,
         'mode': mode,
         'mode_label': colorcomp.MODE_LABELS[mode],
         'has_colorcomp': cc is not None,
         'compensated_this': compensated_this,
         'compensated_all': compensated_all,
-        'target_colour': cc.get('colour') if cc else None,
+        'target_colour': target_colour,
+        'colorcomp_steps': steps,
+        'colorcomp_equation': steps['equation'] if steps else None,
         'triplet_ids': cc.get('task_ids') if cc else None,
         'sisters_status': sisters.get('status') if sisters else None,
         'sisters_computable': bool(sisters and sisters.get('status') == 'ok'),
@@ -185,12 +297,12 @@ def photometry_context(task, point, with_desc=True, with_sisters=False):
 
 def _notification_measure(task, point):
     ctx = photometry_context(task, point, with_desc=False)
-    if ctx['has_colorcomp'] and ctx['compensated_this']:
-        d = ctx['compensated_this']
-        band = ctx['band'] or '?'
+    steps = ctx.get('colorcomp_steps')
+    if steps:
+        band = steps['band']
         return (
-            f'Gaia {band} {d["mag"]:.3f} ± {d["magerr"]:.3f} (colour-compensated); '
-            f'{d["mag_cal"]:.3f} ± {d["magerr_cal"]:.3f} (colour-free)'
+            f'Gaia {band} = {steps["mag_true"]:.3f} ± {steps["magerr_true"]:.3f} mag'
+            f' (true, colour-compensated; mag_cal = {steps["mag_cal"]:.3f}, k = {steps["k_str"]})'
         )
     return f'{mag_string(point)} {ctx["filt_label"]}'.rstrip()
 
@@ -203,20 +315,14 @@ def photometry_measure_lines(task, point):
     if ctx['has_colorcomp'] and ctx['compensated_this']:
         d = ctx['compensated_this']
         band = ctx['band'] or '?'
-        lines.append(
-            f'  Gaia {band} = {d["mag_cal"]:.3f} ± {d["magerr_cal"]:.3f} mag'
-            f'  (calibrated on field stars; target colour not applied)'
-        )
-        lines.append(
-            f'  Gaia {band} = {d["mag"]:.3f} ± {d["magerr"]:.3f} mag'
-            f'  (colour-compensated)'
-        )
         col = ctx['target_colour']
-        lines.append(f'  Target colour (BP − RP) = {col["value"]:.2f} ± {col["err"]:.2f}')
-        ids = ctx['triplet_ids']
-        lines.append(
-            f'  Triplet tasks {ids["G"]} (G) / {ids["BP"]} (BP) / {ids["RP"]} (RP), {ctx["mode_label"]}.'
-        )
+        for ln in colorcomp_measure_lines(
+            band, d, col,
+            color_name=ctx.get('color_name') or '',
+            triplet_ids=ctx.get('triplet_ids'),
+            mode_label=ctx.get('mode_label') or '',
+        ):
+            lines.append(f'  {ln}')
         if ctx['compensated_all']:
             all_mags = ', '.join(
                 f'{b} = {ctx["compensated_all"][b]["mag"]:.3f} ± {ctx["compensated_all"][b]["magerr"]:.3f}'
@@ -226,19 +332,21 @@ def photometry_measure_lines(task, point):
             lines.append(f'  All bands (colour-compensated): {all_mags}')
     else:
         lines.append(f'  {ctx["filt_label"]} = {mag_string(point)} mag')
-        if ctx['k'] is not None:
+        if ctx['color_term_used']:
             cname = _format_color_name(ctx['color_name'])
             lines.append(f'  Calibration colour term: k = {ctx["k"]:.3f} ({cname} of field stars).')
             lines.append('  This magnitude does not include the colour of the target itself.')
-        if ctx['sisters_computable'] and not ctx['has_colorcomp']:
-            lines.append(
-                '  A G/BP/RP triplet is available on the task page; compute colour compensation'
-                ' there before publishing for true Gaia magnitudes.'
-            )
-        elif ctx['band'] in colorcomp.BANDS and not ctx['has_colorcomp']:
-            lines.append(
-                '  Colour compensation requires G, BP and RP images the same night (see task page).'
-            )
+            if ctx['sisters_computable'] and not ctx['has_colorcomp']:
+                lines.append(
+                    '  A G/BP/RP triplet is available on the task page; compute colour compensation'
+                    ' there before publishing for true Gaia magnitudes.'
+                )
+            elif ctx['band'] in colorcomp.BANDS and not ctx['has_colorcomp']:
+                lines.append(
+                    '  Colour compensation requires G, BP and RP images the same night (see task page).'
+                )
+        else:
+            lines.append('  Note: a colour term was not used in this photometry.')
 
     return lines, ctx
 

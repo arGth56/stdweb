@@ -42,9 +42,9 @@
           <input type="hidden" name="alert_kind" value="{{ alert_kind }}">
         </div>
         <p class="small text-muted">
-          {% if photometry.has_colorcomp and photometry.compensated_this %}
-            Measure: <strong>Gaia {{ photometry.band }} = {{ photometry.compensated_this.mag|floatformat:3 }} ± {{ photometry.compensated_this.magerr|floatformat:3 }}</strong> (colour-compensated)
-            · colour-free {{ photometry.mag_stdweb|floatformat:3 }} ± {{ photometry.magerr_stdweb|floatformat:3 }}
+          {% if photometry.colorcomp_steps %}
+            Measure: <strong>Gaia {{ photometry.colorcomp_steps.band }} = {{ photometry.colorcomp_steps.mag_true|floatformat:3 }} ± {{ photometry.colorcomp_steps.magerr_true|floatformat:3 }}</strong> (true)
+            · mag<sub>cal</sub> {{ photometry.colorcomp_steps.mag_cal|floatformat:3 }} · k = {{ photometry.colorcomp_steps.k|floatformat:3 }}
           {% else %}
             Measure: <strong>{{ mag_s }} {{ photometry.filt_label }}</strong>
             {% if photometry.k != None %} · k = {{ photometry.k|floatformat:3 }}{% endif %}
