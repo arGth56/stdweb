@@ -80,12 +80,15 @@
                   {% endif %}
 
                   <div>
-                  {% if task.config.target %}
-                    Target: <span class="fw-bold">{{ task.config.target|first_line }}</span>
+                  {% with name=task.config.target|target_name %}
+                  {% if name or task.config.target_ra or task.config.target_dec %}
+                    Target:
+                    {% if name %}<span class="fw-bold">{{ name }}</span>{% endif %}
+                    {% if task.config.target_ra or task.config.target_dec %}
+                      <span class="{% if name %}text-muted{% else %}fw-bold{% endif %}">{{ task.config.target_ra|to_sexadecimal_hours }} {{ task.config.target_dec|to_sexadecimal_plus }}</span>
+                    {% endif %}
                   {% endif %}
-                  {% if task.config.target_ra or task.config.target_dec %}
-                    <span class="{% if task.config.target %}text-muted{% else %}fw-bold{% endif %}">{% if not task.config.target %}Target: {% endif %}{{ task.config.target_ra|to_sexadecimal_hours }} {{ task.config.target_dec|to_sexadecimal_plus }}</span>
-                  {% endif %}
+                  {% endwith %}
                   {% if task.config.filter %}
                     <span class="ms-2">Filter: <span class="fw-bold">{{ task.config.filter }}</span></span>
                   {% endif %}

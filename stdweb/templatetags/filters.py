@@ -3,6 +3,7 @@ from django.template.defaultfilters import stringfilter
 from django.utils.safestring import mark_safe
 
 import datetime
+import re
 import uuid
 import humanize
 
@@ -105,9 +106,13 @@ def split(value, sep=','):
 
 
 @register.filter
-def first_line(value):
+def target_name(value):
+    """First line of the target field, or '' when it is just coordinates."""
     lines = str(value or '').strip().splitlines()
-    return lines[0].strip() if lines else ''
+    name = lines[0].strip() if lines else ''
+    if re.fullmatch(r"[\d\s:+\-.,hmsd°'\"]*", name):
+        return ''
+    return name
 
 
 @register.filter
