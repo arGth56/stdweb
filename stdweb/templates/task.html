@@ -271,7 +271,7 @@
         <fieldset class="small" {% if task.celery_id %}disabled{% endif %}>
           {% crispy form_inspect %}
 
-          <button type="submit" name="action" value="inspect_image" class="btn btn-primary">Run initial inspection</button>
+          <button type="submit" name="action" value="inspect_image" class="btn btn-primary" data-onboard="inspect">Run initial inspection</button>
 
           <button type="submit" name="action" value="make_custom_mask" class="btn btn-secondary"
                   title="Create custom mask to define usable image regions">Make custom mask</button>
@@ -517,7 +517,7 @@
 
             {% crispy form_photometry %}
 
-            <button type="submit" name="action" value="photometry_image" class="btn btn-primary">Run photometry</button>
+            <button type="submit" name="action" value="photometry_image" class="btn btn-primary" data-onboard="photometry">Run photometry</button>
           </fieldset>
         </form>
       {% endif %}
@@ -584,6 +584,7 @@
                 {% else %}
                   <a href="{% url 'telegram_compose' task.id %}"
                      class="btn btn-primary btn-sm ms-1"
+                     data-onboard="target"
                      title="Compose an ATel-style telegram for this measurement only.">
                     Publish to Telegram{% if tns_alert.matched and tns_alert.on_target %} ({{ tns_alert.tns_name }}){% elif ep_alert.matched %} (EP-WXT {{ ep_alert.trigger }}){% endif %}
                   </a>
@@ -723,7 +724,7 @@
 
             {% crispy form_transients_simple %}
 
-            <button type="submit" name="action" value="transients_simple_image" class="btn btn-primary">Run simple transient detection</button>
+            <button type="submit" name="action" value="transients_simple_image" class="btn btn-primary" data-onboard="transients">Run simple transient detection</button>
           </fieldset>
         </form>
       {% endif %}
@@ -830,7 +831,7 @@
 
             {% crispy form_subtraction %}
 
-            <button type="submit" name="action" value="subtract_image" class="btn btn-primary">Run subtraction</button>
+            <button type="submit" name="action" value="subtract_image" class="btn btn-primary" data-onboard="subtraction">Run subtraction</button>
           </fieldset>
         </form>
       {% endif %}

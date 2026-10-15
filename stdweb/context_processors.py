@@ -11,3 +11,8 @@ def acquisition_seo(request):
     from stdweb import acquisition_seo as seo
 
     return seo.seo_context(request)
+
+
+def onboarding(request):
+    from stdweb import onboarding as ob
+    return {'onboarding': ob.page_payload(request)}

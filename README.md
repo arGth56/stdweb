@@ -13,6 +13,8 @@ It currently allows you to:
 - Do (experimental) transient detection in difference image
 - Publish a single forced-photometry measurement as a public telegram (ATel-style text, task link, target cutout)
 
+A first-visit **How to** guide (top bar) walks through login → upload → target → inspect → photometry, with annotated screen copies from a real RAPAS task (Nova Sge, task 4853). See [docs/onboarding/](docs/onboarding/README.md).
+
 If you want to better understand the routines used for it, please consult [STDPipe documentation](https://stdpipe.readthedocs.io/) and [example notebooks](https://github.com/karpov-sv/stdpipe/tree/master/notebooks), as well as the [paper describing it](https://ojs.cvut.cz/ojs/index.php/ap/article/view/9969)
 
 # Telegram

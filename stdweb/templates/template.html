@@ -37,6 +37,7 @@
     <link rel="stylesheet" href="{% static 'dark.css' %}">
     <script src="{% static 'image_overlay.js' %}"></script>
     <script src="{% static 'help_popover.js' %}"></script>
+    <link rel="stylesheet" href="{% static 'onboarding.css' %}?v=4">
 
     <!-- Select2 Bootstrap5 theme - version from https://github.com/drakej/select2-bootstrap-5-theme -->
     <link rel="stylesheet" href="{% static 'select2-bootstrap-5-theme.min.css' %}" />
@@ -79,6 +80,9 @@
             </li>
             <li class="nav-item">
               <a class="nav-link {% if request.resolver_match and 'telegram' in request.resolver_match.view_name %}active{% endif %}" href="{% url 'telegram' %}">Telegram</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="#" id="onboard-reopen" title="How to use STDWeb">How to</a>
             </li>
             {% if perms.stdweb.skyportal_upload and settings.SKYPORTAL_TOKEN %}
               <li class="nav-item">
@@ -188,5 +192,7 @@
       </div>
     </footer>
     {% endif %}
+    {% include "onboarding.html" %}
+    <script src="{% static 'onboarding.js' %}?v=7"></script>
   </body>
 </html>

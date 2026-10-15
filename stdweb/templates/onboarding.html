@@ -1,0 +1,50 @@
+{% load static %}
+<input type="hidden" id="onboard-static" value="{% get_static_prefix %}onboarding/">
+{{ onboarding|json_script:"onboard-config" }}
+
+<div id="ob-overlay" class="ob-overlay" hidden aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="ob-title">
+  <div class="ob-card">
+    <header>
+      <p class="text-muted small mb-0">Why STDWeb · your first target · how to measure</p>
+      <button type="button" class="btn-close btn-close-white" id="ob-close" aria-label="Close"></button>
+    </header>
+    <div id="ob-dots" class="ob-steps"></div>
+    <div class="ob-body">
+      <div class="ob-media">
+        <img id="ob-img" alt="STDWeb walkthrough" src="{% static 'onboarding/teaser.gif' %}">
+      </div>
+      <div class="ob-copy">
+        <h2 id="ob-title">Why STDWeb?</h2>
+        <p id="ob-text" class="text-muted">
+          A Gaia-calibrated magnitude from any FITS, in the browser. This guide covers why it
+          is worth it, how to set your first target, and how to measure it.
+        </p>
+        <p class="small text-muted mb-0">
+          Animated screen copies from RAPAS task
+          <a href="{% url 'tasks' onboarding.demo_task_id %}">{{ onboarding.demo_task_id }}</a>
+          (Nova Sge).
+        </p>
+      </div>
+    </div>
+    <div class="ob-foot">
+      <div>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="ob-prev">Back</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="ob-next">Next</button>
+      </div>
+      <div>
+        <button type="button" class="btn btn-link btn-sm text-muted" id="ob-skip">Don't show again</button>
+        <a class="btn btn-outline-primary btn-sm" id="ob-demo"
+           href="{% url 'tasks' onboarding.demo_task_id %}?onboard=inspect">Open demo task</a>
+        {% if user.is_authenticated %}
+          <a class="btn btn-primary btn-sm" href="{% url 'index' %}?onboard=upload">Upload a FITS</a>
+        {% else %}
+          <a class="btn btn-primary btn-sm" href="{% url 'login' %}?next={% url 'index' %}">Log in to upload</a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<button type="button" id="ob-pill" class="btn btn-primary ob-pill" hidden>
+  <span id="ob-pill-label">How to use STDWeb</span>
+</button>
