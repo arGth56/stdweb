@@ -14,7 +14,17 @@
 
       {% if form.errors %}
         <div class="alert alert-danger" role="alert">
-          Please fix the errors below.
+          <p class="mb-2 fw-semibold">Please fix the following:</p>
+          <ul class="mb-0">
+            {% for field in form %}
+              {% for err in field.errors %}
+                <li>{% if field.name != "username" %}{{ field.label }}: {% endif %}{{ err }}</li>
+              {% endfor %}
+            {% endfor %}
+            {% for err in form.non_field_errors %}
+              <li>{{ err }}</li>
+            {% endfor %}
+          </ul>
         </div>
       {% endif %}
 
