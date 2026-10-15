@@ -29,6 +29,8 @@ from stdpipe import astrometry, photometry, catalogs, cutouts
 from stdpipe import templates, subtraction, plots, pipeline, utils, psf
 from stdpipe import resolve
 
+from . import sso
+
 # Disable some annoying warnings from astropy
 import warnings
 from astropy.wcs import FITSFixedWarning
@@ -66,6 +68,15 @@ def _fits_pointing(header):
         except Exception:
             pass
     return None
+
+
+def _resolve_center(string, config):
+    """Search centre; a target name reuses the position resolved at inspection (e.g. an ephemeris)."""
+    name = str(string).strip()
+    for target in config.get('targets') or []:
+        if str(target.get('name', '')).strip() == name and target.get('ra') is not None:
+            return SkyCoord(target['ra'], target['dec'], unit='deg')
+    return resolve.resolve(name)
 
 
 # Supported filters and their aliases
@@ -1061,6 +1072,33 @@ def inspect_image(filename, config, verbose=True, show=False):
         config['blind_match_wcs'] = True
         log("No usable WCS found, blind matching enabled")
 
+    # Time (needed before the targets, as solar-system ephemerides depend on it)
+    if not config.get('time'):
+        time = None
+        # Prefer the exposure *midpoint* (DATE-AVG, written e.g. by N.I.N.A.)
+        # over the exposure *start* (DATE-OBS). The midpoint is the more correct
+        # epoch for photometry, especially for long exposures. Fall back to the
+        # usual keyword search (DATE-OBS, MJD, ...) if DATE-AVG is missing/bad.
+        if header is not None and header.get('DATE-AVG'):
+            try:
+                time = utils.get_obs_time(string=str(header['DATE-AVG']),
+                                          verbose=verbose)
+                if time is not None:
+                    log(f"Using DATE-AVG (exposure midpoint) as observation time: {header['DATE-AVG']}")
+            except Exception:
+                time = None
+            if time is not None:
+                config['time_date_avg'] = time.iso
+        if time is None:
+            time = utils.get_obs_time(header=header, verbose=verbose)
+
+        if time is not None:
+            config['time'] = time.iso
+
+    if config.get('time'):
+        log(f"Time is {config.get('time')}")
+        log(f"MJD is {Time(config.get('time')).mjd}")
+
     # Target: config (stdbatch/API) wins if it is a real name; otherwise FITS
     # OBJECT / TARGET / pointing. Never resolve placeholders like "image" via Sesame.
     _dummy = {
@@ -1146,6 +1184,24 @@ def inspect_image(filename, config, verbose=True, show=False):
                         except Exception as _ce:
                             # Doesn't parse as coords either — fall through to Sesame
                             pass
+
+                    # Comets, asteroids and NEOCP objects: ephemeris at the exposure mid-time.
+                    # Must come before Sesame, whose failure falls back to the FITS pointing.
+                    if 'ra' not in target and (sso.horizons_command(target['name']) or
+                                               sso.looks_like_neocp(target['name'])):
+                        epoch = sso.ephemeris_epoch(config, header)
+                        if epoch is None:
+                            log("  Looks like a solar-system designation, but the observation time is unknown")
+                        else:
+                            eph = sso.resolve_sso(target['name'], epoch, sso.observer_site(header), verbose=log)
+                            if eph is not None:
+                                target['ra'], target['dec'] = eph['ra'], eph['dec']
+                                target['sso'] = eph
+                                log(f"  Solar-system object from {eph['source']}: "
+                                    f"RA={eph['ra']:.5f} Dec={eph['dec']:.5f} "
+                                    f"at {eph['epoch']} UTC (exposure mid-time), seen from {eph['site']}")
+                                if eph.get('unc') is not None:
+                                    log(f"  Ephemeris uncertainty {eph['unc']:.1f} arcsec (3 sigma)")
 
                     if 'ra' not in target:
                         # Skip the slow stdpipe resolver for obvious transient names (SN/AT)
@@ -1371,31 +1427,6 @@ def inspect_image(filename, config, verbose=True, show=False):
             config['template'] = 'ps1' # Fallback
 
         log(f"Suggested template is {supported_templates[config['template']]['name']}")
-
-    # Time
-    if not config.get('time'):
-        time = None
-        # Prefer the exposure *midpoint* (DATE-AVG, written e.g. by N.I.N.A.)
-        # over the exposure *start* (DATE-OBS). The midpoint is the more correct
-        # epoch for photometry, especially for long exposures. Fall back to the
-        # usual keyword search (DATE-OBS, MJD, ...) if DATE-AVG is missing/bad.
-        if header is not None and header.get('DATE-AVG'):
-            try:
-                time = utils.get_obs_time(string=str(header['DATE-AVG']),
-                                          verbose=verbose)
-                if time is not None:
-                    log(f"Using DATE-AVG (exposure midpoint) as observation time: {header['DATE-AVG']}")
-            except Exception:
-                time = None
-        if time is None:
-            time = utils.get_obs_time(header=header, verbose=verbose)
-
-        if time is not None:
-            config['time'] = time.iso
-
-    if config.get('time'):
-        log(f"Time is {config.get('time')}")
-        log(f"MJD is {Time(config.get('time')).mjd}")
 
 
 def check_photometry_quality(basepath, config, m, target_obj, log=None):
@@ -2003,7 +2034,7 @@ def photometry_image(filename, config, verbose=True, show=False):
             raise RuntimeError('Too few good objects for blind matching')
 
         if config.get('blind_match_center'):
-            center = resolve.resolve(config.get('blind_match_center'))
+            center = _resolve_center(config.get('blind_match_center'), config)
             center_ra = center.ra.deg
             center_dec = center.dec.deg
         else:
@@ -2584,9 +2615,11 @@ def transients_simple_image(filename, config, verbose=True, show=False):
 
     log("\n---- Simple catalogue-based transient detection ----\n")
 
+    obj_all = obj
+
     # Restrict to the cone if center and radius are provided
     if config.get('simple_center') and config.get('simple_sr0'):
-        center = resolve.resolve(config.get('simple_center'))
+        center = _resolve_center(config.get('simple_center'), config)
         sr0 = config.get('simple_sr0')
         log(f"Restricting the search to {sr0:.3f} deg around RA={center.ra.deg:.4f} Dec={center.dec.deg:.4f}")
         dist = astrometry.spherical_distance(obj['ra'], obj['dec'], center.ra.deg, center.dec.deg)
@@ -2609,6 +2642,21 @@ def transients_simple_image(filename, config, verbose=True, show=False):
                     log(f"Task {other}: {len(obj1)} objects, {len(obj)} matches")
 
         log(f"{len(obj)} objects after cross-checking")
+
+    # Solar-system targets are often extended (coma) or trailed, so the shape pre-filter rejects them
+    for target in config.get('targets') or []:
+        if target.get('sso') and len(obj):
+            radius = max(2*fwhm*pixscale*3600, target['sso'].get('unc') or 0)
+            dist = astrometry.spherical_distance(obj['ra'], obj['dec'], target['ra'], target['dec'])*3600
+            idx = (dist < radius) & ((obj['flags'] & 0x800) > 0)
+            if np.any(idx):
+                obj['flags'][idx] -= 0x800
+                log(f"Keeping {np.sum(idx)} detection(s) within {radius:.1f} arcsec of solar-system "
+                    f"target {target['name']} regardless of the shape pre-filter")
+            if config.get('simple_skybot', True):
+                log(f"Warning: SkyBoT filtering may reject the solar-system target {target['name']} itself")
+
+    obj_region = obj
 
     # Vizier catalogues to check
     vizier = guess_vizier_catalogues(ra0, dec0)
@@ -2770,6 +2818,35 @@ def transients_simple_image(filename, config, verbose=True, show=False):
         )
 
     candidates = rank_simple_candidates(candidates, obj)
+
+    # Explain why nothing was kept at the primary target position, if so
+    target0 = (config.get('targets') or [{}])[0]
+    if target0.get('ra') is not None and len(obj_all):
+        radius = 2*fwhm*pixscale
+        def _dist(t):
+            return astrometry.spherical_distance(t['ra'], t['dec'], target0['ra'], target0['dec'])
+
+        if not len(candidates) or np.min(_dist(candidates)) > radius:
+            d_all = _dist(obj_all)
+            if np.min(d_all) > radius:
+                log(f"No detection within {3600*radius:.1f} arcsec of the primary target")
+            else:
+                nearest = obj_all[np.argmin(d_all)]
+                number = nearest['NUMBER']
+                kept = obj[obj['NUMBER'] == number]
+                if not np.any(obj_region['NUMBER'] == number):
+                    reason = "it is outside the search region (or not in the cross-checked tasks)"
+                elif not len(kept):
+                    reason = "it matches a star of the reference catalogue"
+                elif kept['flags'][0] & flagmask & 0x800:
+                    reason = (f"the shape pre-filter rejected it (FWHM {nearest['fwhm']:.1f} px vs "
+                              f"{fwhm:.1f} px for the field); untick 'reject pre-filtered detections' to keep it")
+                elif kept['flags'][0] & flagmask:
+                    reason = f"it is flagged (0x{int(kept['flags'][0] & flagmask):x})"
+                else:
+                    reason = "it matches a Vizier catalogue star, a known solar-system object or a blend"
+                log(f"Detection {3600*np.min(d_all):.1f} arcsec from the primary target "
+                    f"(mag {nearest['mag_calib']:.2f}) is not a candidate: {reason}")
 
     # Restrict to 100 highest-ranked ones if there are too many
     if len(candidates) > 100:
@@ -3413,7 +3490,7 @@ def subtract_image(filename, config, verbose=True, show=False):
             # Restrict to the cone if center and radius are provided
             if config.get('filter_center') and config.get('filter_sr0'):
                 # TODO: resolve the center only once
-                center = resolve.resolve(config.get('filter_center'))
+                center = _resolve_center(config.get('filter_center'), config)
                 sr0 = config.get('filter_sr0')
                 log(f"Restricting the search to {sr0:.3f} deg around RA={center.ra.deg:.4f} Dec={center.dec.deg:.4f}")
                 dist = astrometry.spherical_distance(sobj['ra'], sobj['dec'], center.ra.deg, center.dec.deg)
