@@ -99,6 +99,20 @@ def list_extract(value, key):
     return [_[key] for _ in value]
 
 
+@register.filter
+def split(value, sep=','):
+    return str(value).split(sep)
+
+
+@register.filter
+def get_item(value, key):
+    """Dictionary lookup with a variable key: {{ mydict|get_item:band }}."""
+    try:
+        return value.get(key)
+    except AttributeError:
+        return None
+
+
 from astropy.table import Table
 
 @register.filter

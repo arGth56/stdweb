@@ -1,5 +1,7 @@
 from django import forms
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
+from django.contrib.auth.models import User
+from django.db.models import Q
 
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Field, Fieldset, Div, Row, Column, Submit, HTML
@@ -409,14 +411,33 @@ class EmailAuthenticationForm(AuthenticationForm):
 
 
 class RegisterForm(UserCreationForm):
-    email = forms.EmailField(required=False, label="Email (optional)")
+    """Email-only signup. User.username is set to the email (login already accepts either)."""
+
+    email = forms.EmailField(required=True, label="Email")
+    username = forms.CharField(required=False, widget=forms.HiddenInput())
 
     class Meta(UserCreationForm.Meta):
-        fields = UserCreationForm.Meta.fields + ("email",)
+        fields = ("username", "email")
+
+    def clean_email(self):
+        email = (self.cleaned_data.get("email") or "").strip()
+        if User.objects.filter(Q(email__iexact=email) | Q(username__iexact=email)).exists():
+            raise forms.ValidationError("An account with this email already exists.")
+        return email
+
+    def clean(self):
+        cleaned = super().clean()
+        email = cleaned.get("email")
+        if email:
+            cleaned["username"] = email
+            self.instance.username = email
+        return cleaned
 
     def save(self, commit=True):
         user = super().save(commit=False)
-        user.email = self.cleaned_data.get("email", "")
+        email = self.cleaned_data.get("email", "")
+        user.email = email
+        user.username = email
         if commit:
             user.save()
         return user

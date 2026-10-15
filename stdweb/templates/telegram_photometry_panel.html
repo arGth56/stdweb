@@ -1,0 +1,75 @@
+{% load filters %}
+{# Context: photometry (from tg.photometry_context) #}
+<div class="card mb-3 {% if photometry.has_colorcomp %}border-success{% elif photometry.sisters_computable %}border-warning{% else %}border-secondary{% endif %}">
+  <div class="card-header py-2"><strong>What goes in the telegram</strong></div>
+  <div class="card-body py-2 small">
+    <table class="table table-sm table-borderless mb-2">
+      {% if photometry.colorcomp_steps %}
+      {% with s=photometry.colorcomp_steps %}
+      <tr>
+        <td class="text-muted" style="width: 42%">(1) Calibrated magnitude<br><span class="fw-normal">mag<sub>cal</sub>, task page</span></td>
+        <td>Gaia {{ s.band }} = {{ s.mag_cal|floatformat:3 }} ± {{ s.magerr_cal|floatformat:3 }} mag</td>
+      </tr>
+      <tr>
+        <td class="text-muted">(2) Colour term <em>k</em><br><span class="fw-normal">measured on this exposure</span></td>
+        <td>
+          <em>k</em> = {{ s.k|floatformat:3 }} ({{ s.color_name }} of field stars),
+          task {{ s.task_id }}, {{ s.obs_time }}
+        </td>
+      </tr>
+      <tr class="table-success">
+        <td class="text-success">(3) True Gaia magnitude<br><span class="fw-normal">mag<sub>cal</sub> + k × (BP−RP)<sub>target</sub></span></td>
+        <td><strong>{{ s.equation }}</strong></td>
+      </tr>
+      {% endwith %}
+      {% if photometry.compensated_all %}
+      <tr>
+        <td class="text-muted">All bands compensated</td>
+        <td>
+          {% for b in "G,BP,RP"|split:"," %}{% with d=photometry.compensated_all|get_item:b %}
+            {% if d %}{{ b }} = {{ d.mag|floatformat:2 }} ± {{ d.magerr|floatformat:2 }}{% if not forloop.last %} · {% endif %}{% endif %}
+          {% endwith %}{% endfor %}
+        </td>
+      </tr>
+      {% endif %}
+      {% else %}
+      <tr>
+        <td class="text-muted" style="width: 42%">Magnitude</td>
+        <td>
+          {% if photometry.is_detection %}
+            <strong>{{ photometry.filt_label }}</strong> = {{ photometry.mag_stdweb|floatformat:3 }} ± {{ photometry.magerr_stdweb|floatformat:3 }}
+          {% elif photometry.mag_limit %}
+            &gt; {{ photometry.mag_limit|floatformat:2 }}
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% if photometry.color_term_used %}
+      <tr>
+        <td class="text-muted">Calibration colour term <em>k</em><br><span class="fw-normal">(field stars, not the target)</span></td>
+        <td><em>k</em> = {{ photometry.k|floatformat:3 }}{% if photometry.color_name %} ({{ photometry.color_name }}){% endif %}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td class="text-muted">Colour term</td>
+        <td class="text-muted">Not used in this photometry.</td>
+      </tr>
+      {% endif %}
+      {% if photometry.color_term_used and photometry.sisters_computable %}
+      <tr class="table-warning">
+        <td colspan="2">
+          ⚠ G/BP/RP triplet found ({{ photometry.mode_label }}) but not computed yet.
+          <a href="{% url 'tasks' task.id %}?color_mode={{ photometry.mode }}#colorcomp">Compute on the task page</a> before publishing for true magnitudes in the draft text.
+        </td>
+      </tr>
+      {% elif photometry.color_term_used and photometry.band in "G,BP,RP"|split:"," %}
+      <tr>
+        <td colspan="2" class="text-muted">
+          No G/BP/RP triplet in {{ photometry.mode_label }} mode — the telegram will publish the colour-free magnitude only.
+        </td>
+      </tr>
+      {% endif %}
+      {% endif %}
+    </table>
+    <div class="text-muted">Mode: {{ photometry.mode_label }}. The draft text below is editable; steps (1)–(3) are included when compensation is computed.</div>
+  </div>
+</div>

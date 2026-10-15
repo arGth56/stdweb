@@ -22,3 +22,6 @@ buttons on the task page, the `/tasks/<id>/state` endpoint).
 > Onboarding is the shortest **honest** path to the user's first real win — a calibrated
 > magnitude — and the discipline to get out of the way once they're moving. STDWeb's
 > `Task.state` machine already *is* the honest checklist; onboarding just reads it.
+
+**Live on the site:** first visit opens a step-by-step card (annotated screen copies from Nova Sge task 4853, in the same order as the RAPAS tutorial: login, upload, target, gain, photometry, results, subtraction). **How to**
+in the navigation reopens it. See [ONBOARDING_SPEC.md](ONBOARDING_SPEC.md) §0.

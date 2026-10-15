@@ -1,0 +1,128 @@
+.ob-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1080;
+  background: rgba(8, 10, 14, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.ob-card {
+  width: min(920px, 100%);
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  background: var(--bs-body-bg, #212529);
+  color: var(--bs-body-color, #dee2e6);
+  border: 1px solid var(--bs-border-color, #495057);
+  border-radius: 12px;
+  box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.45);
+}
+
+.ob-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 1.25rem 0.4rem;
+}
+
+.ob-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0 1.25rem;
+}
+
+.ob-step-dot {
+  border: 1px solid var(--bs-border-color, #495057);
+  background: transparent;
+  color: inherit;
+  border-radius: 999px;
+  padding: 0.15rem 0.65rem;
+  font-size: 0.8rem;
+}
+
+.ob-step-dot.is-on {
+  background: var(--bs-primary, #0d6efd);
+  border-color: var(--bs-primary, #0d6efd);
+  color: #fff;
+}
+
+.ob-step-dot.is-done {
+  opacity: 0.7;
+}
+
+.ob-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(240px, 0.9fr);
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  align-items: start;
+}
+
+.ob-media {
+  background: #0e1116;
+  border-radius: 8px;
+  overflow: hidden;
+  min-height: 240px;
+  aspect-ratio: 720 / 450;
+}
+
+.ob-media img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #0e1116;
+}
+
+.ob-copy h2 {
+  font-size: 1.25rem;
+  margin: 0 0 0.5rem;
+}
+
+.ob-copy p {
+  margin: 0 0 0.6rem;
+}
+
+.ob-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: space-between;
+  padding: 0 1.25rem 1.2rem;
+}
+
+.ob-pill {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 1070;
+  border-radius: 999px;
+  padding: 0.45rem 0.9rem;
+  box-shadow: 0 0.4rem 1.2rem rgba(0, 0, 0, 0.35);
+}
+
+.onboard-spotlight {
+  outline: 3px solid #ffc107;
+  outline-offset: 4px;
+  animation: ob-pulse 1.4s ease-in-out 3;
+}
+
+@keyframes ob-pulse {
+  50% { outline-color: #fff3cd; }
+}
+
+@media (max-width: 800px) {
+  .ob-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onboard-spotlight {
+    animation: none;
+  }
+}

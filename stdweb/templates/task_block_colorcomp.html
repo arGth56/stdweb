@@ -1,0 +1,329 @@
+{% load filters %}
+{% load static %}
+{# Colour-compensated photometry from G / BP / RP sister tasks. Context: colorcomp, task, user_may_submit #}
+<div id="colorcomp" class="card mb-3 border-{% if colorcomp.result or colorcomp.can_compute %}success{% elif colorcomp.status == 'ambiguous' %}warning{% else %}danger{% endif %}">
+  <div class="card-header d-flex flex-wrap align-items-center gap-2">
+    <strong>Colour correction (G + BP + RP → true Gaia magnitudes)</strong>
+    <span class="badge text-bg-secondary">{{ colorcomp.mode_label }}</span>
+    {% if colorcomp.modes|length > 1 %}
+      <span class="ms-auto small">
+        Image type:
+        {% for m in colorcomp.modes %}
+          <a class="btn btn-sm {% if m.active %}btn-secondary{% else %}btn-outline-secondary{% endif %}"
+             href="?color_mode={{ m.key }}&color_window={{ colorcomp.window_min|floatformat:0 }}#colorcomp"
+             title="{% if m.has_result %}Result stored{% else %}No result yet{% endif %}">{{ m.label }}{% if m.has_result %} ✔{% endif %}</a>
+        {% endfor %}
+      </span>
+    {% endif %}
+    <a href="{% url 'color_help' %}" target="_blank" rel="noopener"
+       class="btn btn-outline-info btn-sm py-0">Why? ↗</a>
+  </div>
+
+  <div class="card-body">
+    {% if colorcomp.reasons %}
+      <div class="alert alert-secondary py-2 mb-2">
+        <strong>Not available for this task.</strong>
+        <ul class="mb-0">{% for r in colorcomp.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+      </div>
+    {% else %}
+
+    {# ---------- object magnitude (always shown) ---------- #}
+    <div class="row g-3 align-items-center mb-3">
+      <div class="col">
+        <div class="text-muted small text-uppercase" style="letter-spacing:.03em">Object magnitude on this task</div>
+        <div class="fs-5 font-monospace mt-1">
+          {% if colorcomp.this.mag != None %}
+            {{ colorcomp.this.colour_free_label }} = <strong>{{ colorcomp.this.mag|floatformat:2 }} ± {{ colorcomp.this.magerr|floatformat:2 }}</strong>
+          {% else %}
+            {{ colorcomp.this.band }}: <span class="text-danger">not detected</span>
+          {% endif %}
+        </div>
+        {% if colorcomp.this_result %}
+          <div class="fs-6 mt-1">
+            <span class="badge text-bg-success">colour-corrected</span>
+            <strong>Gaia {{ colorcomp.this.band }} = {{ colorcomp.this_result.mag|floatformat:2 }} ± {{ colorcomp.this_result.magerr|floatformat:2 }}</strong>
+            <span class="text-muted small">(full table below)</span>
+          </div>
+        {% else %}
+          <div class="small text-muted mt-1">
+            The <code>(BP − RP)</code> colour term above is not filled in yet —
+            <a href="{% url 'color_help' %}" target="_blank" rel="noopener">why it matters ↗</a>.
+          </div>
+        {% endif %}
+      </div>
+      <div class="col-auto d-none d-sm-block">
+        <a href="{% url 'color_help' %}" target="_blank" rel="noopener" title="Why colour correction is needed">
+          <img src="{% static 'colorcomp_why.svg' %}" alt="Why colour correction is needed"
+               class="rounded border bg-white" style="width:230px; max-width:100%;">
+        </a>
+      </div>
+    </div>
+
+    {% if colorcomp.result %}
+    <details class="mb-2">
+      <summary class="small text-muted" style="cursor:pointer">Change the images used for the correction</summary>
+      <div class="mt-2">
+    {% else %}
+    <h6 class="mb-2">To correct it, match the three bands (G, BP, RP)</h6>
+    {% endif %}
+
+    <form method="post" action="{% url 'tasks' task.id %}" id="colorcomp-form">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="color_compensate">
+      <input type="hidden" name="color_mode" value="{{ colorcomp.mode }}">
+      <input type="hidden" name="color_window" value="{{ colorcomp.window_min|floatformat:0 }}">
+      <input type="hidden" name="color_{{ colorcomp.this.band|lower }}" value="{{ colorcomp.this.id }}">
+
+      <table class="table table-sm align-middle mb-2">
+        <thead>
+          <tr class="small text-muted">
+            <th>Filter</th>
+            <th>Task</th>
+            <th>When (UTC)</th>
+            <th>Magnitude on task page<br><span class="fw-normal">(colour of target not included)</span></th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="table-active">
+            <td>
+              <strong>{{ colorcomp.this.band }} band</strong>
+              <div class="text-muted small">this image</div>
+            </td>
+            <td>{{ colorcomp.this.id }}</td>
+            <td class="small">{{ colorcomp.this.time_iso|slice:":16" }}</td>
+            <td>
+              {% if colorcomp.this.mag != None %}
+                <strong>{{ colorcomp.this.mag|floatformat:2 }} ± {{ colorcomp.this.magerr|floatformat:2 }}</strong>
+              {% else %}
+                <span class="text-danger">not detected</span>
+              {% endif %}
+            </td>
+            <td></td>
+          </tr>
+          {% for slot in colorcomp.bands %}
+            {% if slot.candidates %}
+              {% for c in slot.candidates %}
+                <tr>
+                  <td>
+                    {% if forloop.first %}<strong>{{ slot.band }} band</strong>{% endif %}
+                    {% if forloop.first and c.dt_min != None %}
+                      <div class="text-muted small">{{ c.dt_min|floatformat:0 }} min from {{ colorcomp.this.band }}</div>
+                    {% endif %}
+                  </td>
+                  <td>
+                    <a href="{% url 'tasks' c.id %}">{{ c.id }}</a>
+                    <span class="text-muted small d-block">{{ c.title|truncatechars:40 }}</span>
+                  </td>
+                  <td class="small">{{ c.time_iso|slice:":16" }}</td>
+                  <td>
+                    {% if c.mag != None %}
+                      <strong>{{ c.mag|floatformat:2 }} ± {{ c.magerr|floatformat:2 }}</strong>
+                    {% else %}
+                      <span class="text-danger">not detected</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if slot.status == 'ok' %}
+                      <input type="hidden" name="color_{{ slot.band|lower }}" value="{{ c.id }}">
+                      <span class="text-success small">✔ OK</span>
+                    {% else %}
+                      <label class="mb-0 small">
+                        <input type="radio" class="form-check-input colorcomp-choice" name="color_{{ slot.band|lower }}" value="{{ c.id }}"
+                               {% if colorcomp.selected|get_item:slot.band == c.id %}checked{% endif %}> pick this one
+                      </label>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            {% else %}
+              <tr>
+                <td><strong>{{ slot.band }} band</strong></td>
+                <td colspan="4" class="text-danger">
+                  <strong>Missing</strong> — no {{ slot.band }} image of this target within ±{{ colorcomp.window_min|floatformat:0 }} min
+                  ({{ colorcomp.mode_label }}).
+                  {% if slot.nearest_outside %}
+                    <span class="text-muted d-block">
+                      Closest match: task <a href="{% url 'tasks' slot.nearest_outside.id %}">{{ slot.nearest_outside.id }}</a>,
+                      but {{ slot.nearest_outside.dt_min|floatformat:0 }} min away
+                      {% if slot.nearest_outside.dt_min > 1440 or slot.nearest_outside.dt_min < -1440 %}
+                        (different night — upload a {{ slot.band }} image the same night as task {{ colorcomp.this.id }})
+                      {% endif %}.
+                    </span>
+                  {% else %}
+                    <span class="text-muted d-block">Upload and process a {{ slot.band }} image of the same target the same night.</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+
+      {% if colorcomp.status == 'ambiguous' %}
+        <div class="alert alert-warning py-2 mb-2 small">
+          <strong>Several {{ colorcomp.mode_label }} images match</strong>
+          ({% for slot in colorcomp.bands %}{% if slot.status == 'ambiguous' %}{{ slot.band }}{% if not forloop.last %}, {% endif %}{% endif %}{% endfor %}).
+          Pick one task per band — often the same file was uploaded twice by mistake.
+        </div>
+      {% elif colorcomp.status == 'missing' %}
+        <div class="alert alert-danger py-2 mb-2 small">
+          <strong>Cannot compute yet</strong> — you need G, BP <em>and</em> RP the same night.
+          {% if colorcomp.modes|length > 1 %}Try switching image type above, {% endif %}
+          or widen the time window below.
+        </div>
+      {% elif colorcomp.status == 'ok' and colorcomp.auto_ok %}
+        <div class="alert alert-success py-2 mb-2 small">
+          <strong>Ready.</strong> Three images match (same target, same night, same mode, all detected).
+          Click Compute to get true Gaia magnitudes.
+        </div>
+      {% elif colorcomp.status == 'ok' %}
+        <div class="alert alert-danger py-2 mb-2 small">
+          <strong>Three images found but cannot compute:</strong>
+          <ul class="mb-0">{% for r in colorcomp.auto_reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+        </div>
+      {% endif %}
+
+      {% if user_may_submit and not task.celery_id %}
+        <button type="submit" class="btn btn-primary btn-sm" id="colorcomp-compute"
+                {% if not colorcomp.can_compute and colorcomp.status != 'ambiguous' %}disabled{% endif %}>
+          {% if colorcomp.result %}Recompute{% else %}Compute{% endif %} true Gaia G / BP / RP
+        </button>
+      {% elif not colorcomp.result %}
+        <div class="small text-muted">Only the observer can run the computation.</div>
+      {% endif %}
+    </form>
+
+    <details class="mt-2 small">
+      <summary class="text-muted" style="cursor:pointer">Advanced: enter task IDs manually or change time window</summary>
+      <form method="get" action="{% url 'tasks' task.id %}#colorcomp" class="row g-2 align-items-end mt-2">
+        <input type="hidden" name="color_mode" value="{{ colorcomp.mode }}">
+        {% for b in "G,BP,RP"|split:"," %}
+          <div class="col-auto">
+            <label class="form-label small mb-0">Task {{ b }}</label>
+            <input type="number" class="form-control form-control-sm" name="color_{{ b|lower }}" style="width: 7em"
+                   value="{% if colorcomp.manual %}{{ colorcomp.manual.ids|get_item:b|default_if_none:'' }}{% elif colorcomp.selected|get_item:b %}{{ colorcomp.selected|get_item:b }}{% endif %}">
+          </div>
+        {% endfor %}
+        <div class="col-auto">
+          <label class="form-label small mb-0">Same-night window (min)</label>
+          <input type="number" class="form-control form-control-sm" name="color_window" style="width: 6em" value="{{ colorcomp.window_min|floatformat:0 }}" min="1" max="1440">
+        </div>
+        <div class="col-auto">
+          <button type="submit" class="btn btn-outline-secondary btn-sm">Check</button>
+        </div>
+      </form>
+      {% if colorcomp.manual %}
+        {% if colorcomp.manual.ok %}
+          <div class="alert alert-success py-2 mt-2 mb-0">
+            ✔ Tasks {{ colorcomp.manual.ids.G }} / {{ colorcomp.manual.ids.BP }} / {{ colorcomp.manual.ids.RP }} OK.
+            {% if user_may_submit and not task.celery_id %}
+              <form method="post" action="{% url 'tasks' task.id %}" class="d-inline ms-2">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="color_compensate">
+                <input type="hidden" name="color_mode" value="{{ colorcomp.mode }}">
+                <input type="hidden" name="color_window" value="{{ colorcomp.window_min|floatformat:0 }}">
+                <input type="hidden" name="color_g" value="{{ colorcomp.manual.ids.G }}">
+                <input type="hidden" name="color_bp" value="{{ colorcomp.manual.ids.BP }}">
+                <input type="hidden" name="color_rp" value="{{ colorcomp.manual.ids.RP }}">
+                <button type="submit" class="btn btn-primary btn-sm">Compute with these</button>
+              </form>
+            {% endif %}
+          </div>
+        {% else %}
+          <div class="alert alert-danger py-2 mt-2 mb-0">
+            <ul class="mb-0">{% for r in colorcomp.manual.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+          </div>
+        {% endif %}
+      {% endif %}
+    </details>
+
+    {% if colorcomp.result %}
+      </div>
+    </details>
+      {% with r=colorcomp.result %}
+      <hr>
+      <h6 class="mb-2">Result — use these values vs Gaia / Prism</h6>
+
+      <div class="alert alert-success py-2 mb-3 small">
+        Your target's colour is <strong>(BP − RP) = {{ r.colour.value|floatformat:2 }} ± {{ r.colour.err|floatformat:2 }}</strong>
+        (from tasks {{ r.task_ids.BP }} and {{ r.task_ids.RP }}).
+        {% if r.colour.value > 1.0 %}
+          This is a relatively red object — task-page G magnitudes can be significantly too faint without correction.
+        {% elif r.colour.value < 0.5 %}
+          This is a relatively blue object.
+        {% endif %}
+      </div>
+
+      <div class="table-responsive">
+      <table class="table table-sm mb-2 align-middle">
+        <thead class="small text-muted">
+          <tr>
+            <th>Filter</th>
+            <th>On task page<br><span class="fw-normal">(before)</span></th>
+            <th></th>
+            <th>True Gaia magnitude<br><span class="fw-normal">(after correction)</span></th>
+            <th>Task</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in "G,BP,RP"|split:"," %}{% with d=r.bands|get_item:b %}
+            <tr>
+              <td><strong>{{ b }} band</strong></td>
+              <td class="text-muted">{{ d.mag_cal|floatformat:2 }} ± {{ d.magerr_cal|floatformat:2 }}</td>
+              <td class="text-muted">→</td>
+              <td class="table-success"><strong>{{ d.mag|floatformat:2 }} ± {{ d.magerr|floatformat:2 }}</strong></td>
+              <td class="small"><a href="{% url 'tasks' d.task_id %}">{{ d.task_id }}</a></td>
+            </tr>
+          {% endwith %}{% endfor %}
+        </tbody>
+      </table>
+      </div>
+
+      <details class="small text-muted mb-2">
+        <summary style="cursor:pointer">Show calculation details</summary>
+        <p class="mt-2 mb-1">For each band: <em>true = task-page mag + k × (BP − RP)<sub>target</sub></em></p>
+        <ul class="mb-0">
+          {% for b in "G,BP,RP"|split:"," %}{% with d=r.bands|get_item:b %}
+            <li>{{ b }}: {{ d.mag_cal|floatformat:3 }} + ({{ d.k|floatformat:3 }}) × {{ r.colour.value|floatformat:3 }}
+              = {% if d.correction >= 0 %}+{% endif %}{{ d.correction|floatformat:3 }}
+              → <strong>{{ d.mag|floatformat:3 }}</strong></li>
+          {% endwith %}{% endfor %}
+        </ul>
+      </details>
+
+      {% for c in r.checks %}
+        <div class="alert alert-{{ c.level }} py-1 px-2 mb-1 small">{% if c.level == 'success' %}✔{% elif c.level == 'danger' %}✘{% else %}⚠{% endif %} {{ c.message }}</div>
+      {% endfor %}
+      <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+        <a class="btn btn-outline-secondary btn-sm" href="{% url 'task_color_csv' task.id r.mode %}">Download CSV</a>
+        <span class="text-muted small">{{ r.mode_label }} · {{ r.computed_at }}{% if r.computed_by %} · {{ r.computed_by }}{% endif %}</span>
+      </div>
+      {% endwith %}
+    {% else %}
+      {% for m in colorcomp.modes %}{% if m.has_result and not m.active %}
+        <div class="small text-muted mt-2">A result exists for <a href="?color_mode={{ m.key }}#colorcomp">{{ m.label }}</a>; not yet for {{ colorcomp.mode_label }}.</div>
+      {% endif %}{% endfor %}
+    {% endif %}
+
+    {% endif %}
+  </div>
+</div>
+
+<script>
+  (function(){
+    var form = document.getElementById('colorcomp-form');
+    var btn = document.getElementById('colorcomp-compute');
+    if(!form || !btn) return;
+    var groups = {};
+    form.querySelectorAll('input.colorcomp-choice').forEach(function(el){ groups[el.name] = true; });
+    if(Object.keys(groups).length === 0) return;
+    function refresh(){
+      btn.disabled = !Object.keys(groups).every(function(name){
+        return form.querySelector('input[name="'+name+'"]:checked');
+      });
+    }
+    form.querySelectorAll('input.colorcomp-choice').forEach(function(el){ el.addEventListener('change', refresh); });
+    refresh();
+  })();
+</script>

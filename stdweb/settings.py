@@ -96,6 +96,7 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 'stdweb.context_processors.expose_settings',
                 'stdweb.context_processors.acquisition_seo',
+                'stdweb.context_processors.onboarding',
             ],
         },
     },
@@ -181,6 +182,7 @@ HOSTING_TAGLINE = config(
 # Acquisition / SEO (référencement). Off by default; enable only on ObsBS production (.env).
 ACQUISITION_SEO_ENABLED = config('ACQUISITION_SEO_ENABLED', default=False, cast=bool)
 SITE_PUBLIC_BASE_URL = config('SITE_PUBLIC_BASE_URL', default='')
+ONBOARDING_DEMO_TASK_ID = config('ONBOARDING_DEMO_TASK_ID', default=4853, cast=int)
 SEO_SITE_NAME = config('SEO_SITE_NAME', default='STDWeb')
 SEO_DEFAULT_DESCRIPTION = config(
     'SEO_DEFAULT_DESCRIPTION',

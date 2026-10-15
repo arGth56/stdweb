@@ -20,6 +20,12 @@ initial → uploaded → inspect_done → photometry_done → transients_simple_
 Onboarding **reads** this; it never writes task state. The value-defining milestone is
 `photometry_done`.
 
+**Shipped (first visit).** A welcome overlay walks through upload → inspect → photometry →
+target with **animated screen copies** from demo task `ONBOARDING_DEMO_TASK_ID` (default
+**4853**). Re-open from **How to** in the top bar. Progress is derived from `Task.state`
+(`GET /onboarding/state`); veterans who already have `photometry_done` are not auto-shown
+the intro. Deep links: `/?onboard=upload`, `/tasks/4853/?onboard=inspect`.
+
 ---
 
 ## 1. Step list (the shared contract)

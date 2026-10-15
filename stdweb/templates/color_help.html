@@ -1,0 +1,83 @@
+{% extends "template.html" %}
+{% load static %}
+
+{% block ptitle %}Colour correction : STDWeb{% endblock %}
+{% block title %}Colour correction — why and how{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-9">
+
+    <p class="lead">
+      The magnitude STDWeb prints after photometry is calibrated on the stars in your field.
+      For a target that is redder or bluer than those stars, that number needs a
+      <strong>colour correction</strong> before you compare it with a catalogue (Gaia, Prism, APASS…).
+      This applies to <strong>any filter system</strong>, not only Gaia.
+    </p>
+
+    <figure class="my-4 text-center">
+      <img src="{% static 'colorcomp_why.svg' %}" alt="Filters overlap and are not perfect; the detector is not equally sensitive at all wavelengths"
+           class="img-fluid rounded border bg-white" style="max-width:640px;">
+    </figure>
+
+    <h3 class="h5 mt-4">Why does a colour term exist?</h3>
+    <ul>
+      <li><strong>Filters are not perfect rectangles.</strong> Each one lets through a broad,
+        smoothly-varying range of wavelengths, and neighbouring bands overlap.</li>
+      <li><strong>The detector and atmosphere are not flat.</strong> A CCD (and the air above the
+        telescope) is more sensitive to some wavelengths than others — the dashed curve above.</li>
+      <li><strong>So the effective response depends on the star's colour.</strong> A blue star and a
+        red star of the same true brightness deposit different amounts of light in the same filter,
+        and are therefore measured slightly differently.</li>
+    </ul>
+    <p>
+      Photometric calibration measures this as a <strong>slope k</strong> (the “colour term”) from the
+      field stars. Your target only gets the correct magnitude once <em>its own</em> colour is applied.
+    </p>
+
+    <h3 class="h5 mt-4">What STDWeb shows on the task page</h3>
+    <p>
+      The task page prints the magnitude together with the colour term, in the same notation as the
+      photometry log:
+    </p>
+    <p class="text-center">
+      <code class="fs-6">Gmag + 0.21 (BPmag − RPmag) = 20.06 ± 0.55</code>
+    </p>
+    <p>
+      Read this as: “the G magnitude <em>is</em> 20.06, <em>plus</em> 0.21 times the target's
+      (BP − RP) colour, which has not been filled in yet.” Until you know the target's colour, the
+      correction term is missing.
+    </p>
+
+    <h3 class="h5 mt-4">How the correction is computed</h3>
+    <p>
+      The target's colour <strong>(BP − RP)</strong> is measured from its <em>own</em> images in the
+      blue and red bands, taken the same night. Then, in each band:
+    </p>
+    <p class="text-center"><code class="fs-6">true magnitude = task-page magnitude + k × (BP − RP)<sub>target</sub></code></p>
+    <ol>
+      <li>Measure the target in three bands (G, BP, RP) the same night.</li>
+      <li>Solve the target's (BP − RP) from its BP and RP measurements.</li>
+      <li>Apply <em>k × (BP − RP)</em> in each band → the true G, BP and RP magnitudes.</li>
+    </ol>
+
+    <h3 class="h5 mt-4">What STDWeb needs from you</h3>
+    <ul>
+      <li>One <strong>G</strong>, one <strong>BP</strong> and one <strong>RP</strong> image of the same
+        target.</li>
+      <li>Same observer, same reference catalogue, same processing mode
+        (direct image <em>or</em> template-subtracted — do not mix).</li>
+      <li>Same night: within ±{{ window_min|floatformat:0 }} minutes; same position on the sky
+        (≤ {{ match_arcsec|floatformat:0 }}″).</li>
+      <li>The target detected (S/N ≥ 3) in all three.</li>
+    </ul>
+    <p class="text-muted">
+      When those are satisfied, the colour-correction block on the task page turns green and the
+      <strong>Compute</strong> button produces the corrected magnitudes, ready to compare with a catalogue.
+    </p>
+
+    <p class="mt-4"><a href="javascript:history.back()" class="btn btn-outline-secondary btn-sm">← Back</a></p>
+
+  </div>
+</div>
+{% endblock %}

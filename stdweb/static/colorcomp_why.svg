@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 230" role="img" aria-labelledby="ttl dsc" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+  <title id="ttl">Why a colour term exists</title>
+  <desc id="dsc">Filters overlap and are not perfect rectangles, and the detector plus atmosphere are not equally sensitive at every wavelength, so a star's measured brightness depends on its colour.</desc>
+  <defs>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#475569"/>
+    </marker>
+  </defs>
+  <rect width="560" height="230" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+
+  <!-- dashed detector + atmosphere sensitivity, top area -->
+  <path d="M 60 150 Q 200 128, 320 96 T 520 60" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="5 4"/>
+  <text x="516" y="52" text-anchor="end" font-size="11" fill="#64748b">detector + atmosphere</text>
+  <text x="516" y="66" text-anchor="end" font-size="11" fill="#64748b">(more sensitive to red here)</text>
+
+  <!-- filter transmission humps -->
+  <path d="M 70 175 L 74 130 Q 108 96, 142 130 L 146 175 Z" fill="#3b82f6" fill-opacity="0.30" stroke="#2563eb" stroke-width="1.4"/>
+  <path d="M 210 175 L 216 118 Q 268 82, 320 118 L 326 175 Z" fill="#22c55e" fill-opacity="0.30" stroke="#16a34a" stroke-width="1.4"/>
+  <path d="M 388 175 L 393 128 Q 438 94, 483 128 L 488 175 Z" fill="#ef4444" fill-opacity="0.30" stroke="#dc2626" stroke-width="1.4"/>
+
+  <!-- filter labels, placed above each peak -->
+  <text x="108" y="90"  text-anchor="middle" font-size="12" font-weight="600" fill="#1d4ed8">blue filter</text>
+  <text x="108" y="104" text-anchor="middle" font-size="9"  fill="#1d4ed8">B / g / BP</text>
+  <text x="268" y="74"  text-anchor="middle" font-size="12" font-weight="600" fill="#15803d">your band</text>
+  <text x="268" y="88"  text-anchor="middle" font-size="9"  fill="#15803d">V / R / G ...</text>
+  <text x="438" y="88"  text-anchor="middle" font-size="12" font-weight="600" fill="#b91c1c">red filter</text>
+  <text x="438" y="102" text-anchor="middle" font-size="9"  fill="#b91c1c">R / i / RP</text>
+
+  <!-- overlap note -->
+  <text x="268" y="150" text-anchor="middle" font-size="9" fill="#166534">broad and overlapping</text>
+
+  <!-- wavelength axis -->
+  <line x1="55" y1="175" x2="525" y2="175" stroke="#64748b" stroke-width="1.2" marker-end="url(#ar)"/>
+  <text x="60" y="192" font-size="10" fill="#64748b">blue</text>
+  <text x="290" y="192" text-anchor="middle" font-size="11" fill="#475569">wavelength</text>
+  <text x="512" y="192" text-anchor="end" font-size="10" fill="#64748b">red</text>
+
+  <!-- takeaway -->
+  <text x="280" y="216" text-anchor="middle" font-size="11" fill="#0f172a">A <tspan fill="#1d4ed8" font-weight="600">blue</tspan> and a <tspan fill="#b91c1c" font-weight="600">red</tspan> star of equal true brightness are measured differently.</text>
+</svg>

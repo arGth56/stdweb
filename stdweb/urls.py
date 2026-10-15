@@ -30,6 +30,7 @@ from . import views_user
 from . import views_batch
 from . import views_lightcurve
 from . import views_telegram
+from . import views_onboarding
 from . import forms
 
 urlpatterns = [
@@ -101,6 +102,8 @@ urlpatterns = [
     path('tasks/<int:id>/candidates', views_tasks.task_candidates, name='task_candidates'),
 
     path('tasks/<int:id>/mask', views_tasks.task_mask, name='task_mask'),
+    path('tasks/<int:id>/color/<str:mode>.csv', views_tasks.task_color_csv, name='task_color_csv'),
+    path('help/color-correction', views_tasks.color_help, name='color_help'),
     path('tasks/<int:id>/state', views_tasks.task_state, name='task_state'),
 
     path('skyportal/', views_skyportal.skyportal, name='skyportal'),
@@ -114,6 +117,7 @@ urlpatterns = [
     path('login/', auth_views.LoginView.as_view(authentication_form=forms.EmailAuthenticationForm), name='login'),
     path('register/', views_user.register, name='register'),
     path('account/', views_user.account, name='account'),
+    path('onboarding/state', views_onboarding.state, name='onboarding_state'),
     path('logout/', auth_views.LogoutView.as_view(), name='logout'),
     path('password/', auth_views.PasswordChangeView.as_view(success_url=reverse_lazy('password_change_done')), name='password'),
     path('password/done/', auth_views.PasswordChangeDoneView.as_view(), name='password_change_done'),

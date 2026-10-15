@@ -1,4 +1,5 @@
 {% extends "template.html" %}
+{% load filters %}
 
 {% block ptitle %}{{ obj.object_name }} : Telegram : STDWeb{% endblock %}
 {% block title %}{{ obj.object_name }}{% endblock %}
@@ -10,16 +11,67 @@
     <p class="text-muted">{{ obj.title }}</p>
   {% endif %}
 
+  {% with p=obj.photometry h=obj.photometry.headline %}
+  {# ── Published measure: the eye lands here first ── #}
+  <div class="card border-{% if h.is_true %}success{% else %}secondary{% endif %} shadow-sm mb-4">
+    <div class="card-body py-3">
+      <div class="text-uppercase text-muted small mb-1">Published measure</div>
+      <div class="d-flex flex-wrap align-items-baseline gap-2">
+        <span class="fs-5 text-muted">{{ h.label }} =</span>
+        <span class="display-6 fw-bold {% if h.is_true %}text-success{% endif %}">{{ h.value }}</span>
+        <span class="fs-6 text-muted">mag</span>
+      </div>
+      {% if h.note %}<div class="small text-muted mt-1">{{ h.note }}</div>{% endif %}
+      <div class="small text-muted mt-2">
+        {{ obj.time }} UT · MJD {{ obj.mjd|floatformat:5 }}
+        {% if obj.is_diff %} · <span>difference image</span>{% endif %}
+        · {{ obj.observer }}
+      </div>
+    </div>
+  </div>
+
+  {# ── How it was derived (supporting detail) ── #}
+  {% if p.colorcomp_steps %}
+    {% with s=p.colorcomp_steps %}
+    <h2 class="h6 text-uppercase text-muted">How it was derived</h2>
+    <ol class="list-unstyled ps-0 mb-3">
+      <li class="mb-1 text-muted small">
+        <span class="badge text-bg-light border me-1">1</span>
+        Calibrated magnitude (mag<sub>cal</sub>): Gaia {{ s.band }} = {{ s.mag_cal|floatformat:3 }} ± {{ s.magerr_cal|floatformat:3 }}
+      </li>
+      <li class="mb-1 text-muted small">
+        <span class="badge text-bg-light border me-1">2</span>
+        Colour term k = {{ s.k|floatformat:3 }} ({{ s.color_name }}), measured on task {{ s.task_id }}, {{ s.obs_time }}
+      </li>
+      <li class="mb-1">
+        <span class="badge text-bg-success me-1">3</span>
+        <strong>{{ s.equation }}</strong>
+      </li>
+    </ol>
+    {% endwith %}
+    {% if p.compensated_all %}
+      <p class="mb-3 small text-muted">
+        All bands compensated:
+        {% for b in "G,BP,RP"|split:"," %}{% with d=p.compensated_all|get_item:b %}
+          {% if d %}{{ b }} = {{ d.mag|floatformat:2 }} ± {{ d.magerr|floatformat:2 }}{% if not forloop.last %} · {% endif %}{% endif %}
+        {% endwith %}{% endfor %}
+      </p>
+    {% endif %}
+  {% else %}
+    <h2 class="h6 text-uppercase text-muted">Calibration</h2>
+    {% if p.color_term_used %}
+      <p class="mb-3 small text-muted">
+        Colour term k = {{ p.k|floatformat:3 }}{% if p.color_name %} ({{ p.color_name }}){% endif %} of the field stars — the target's own colour was not applied.
+      </p>
+    {% else %}
+      <p class="mb-3 small text-muted">A colour term was not used in this photometry.</p>
+    {% endif %}
+  {% endif %}
+  {% endwith %}
+
+  {# ── Full telegram text ── #}
   <h2 class="h6 text-uppercase text-muted">Text</h2>
   <pre class="border rounded p-3 font-monospace" style="white-space: pre-wrap;">{{ obj.body }}</pre>
-
-  <h2 class="h6 text-uppercase text-muted mt-4">Measure</h2>
-  <p>
-    {{ obj.time }} UT · MJD {{ obj.mjd|floatformat:5 }} ·
-    <strong>{{ obj.filt }} = {{ obj.mag_s }}</strong>
-    {% if obj.is_diff %} <span class="text-muted">(difference image)</span>{% endif %}
-    · {{ obj.observer }}
-  </p>
 
   <h2 class="h6 text-uppercase text-muted mt-4">Links</h2>
   <p>

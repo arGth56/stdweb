@@ -119,6 +119,9 @@ ENV/
 /tasks/
 /static/
 
+# Onboarding GIF sources (keep built GIFs in stdweb/static/onboarding/)
+stdweb/static/onboarding/src/
+
 db.sqlite3
 dump.rdb
 

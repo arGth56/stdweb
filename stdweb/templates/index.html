@@ -75,7 +75,7 @@
   {% if user.is_authenticated %}
 
     <!-- File upload form -->
-    <form method='POST' action="{% url 'upload' %}" enctype="multipart/form-data">
+    <form method='POST' action="{% url 'upload' %}" enctype="multipart/form-data" data-onboard="upload">
 
       {% crispy form %}
 

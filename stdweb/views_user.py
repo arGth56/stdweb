@@ -23,7 +23,7 @@ def register(request):
         form = RegisterForm(request.POST)
         if form.is_valid():
             user = form.save()
-            login(request, user)
+            login(request, user, backend=settings.AUTHENTICATION_BACKENDS[0])
             messages.success(request, "Account created. You are now logged in.")
             return redirect("index")
     else:
