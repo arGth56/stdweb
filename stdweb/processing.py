@@ -830,7 +830,7 @@ def filter_vizier_blends(
                         xidx = vizier_checker_fn(xobj, xcat, catname)
                         xcat = xcat[xidx]
 
-                    cand_idx &= ~np.in1d(obj[col_id], xcat[col_id])
+                    cand_idx &= ~np.isin(obj[col_id], xcat[col_id])
 
         log(
             np.sum(cand_idx),
@@ -953,14 +953,26 @@ def inspect_image(filename, config, verbose=True, show=False):
     img_max    = np.nanmax(image)
     img_median = np.nanmedian(image)
 
+    # A saturation level close to the sky flags every star as saturated. This happens with raw-ADU
+    # values on calibrated images (<= 2x a positive sky), and with DATAMAX holding display cuts
+    # (e.g. PRISM) on images with a negative background, where a 2x-median test cannot work.
+    def _implausible_saturation(satlevel):
+        if satlevel <= 0 or satlevel <= img_median:
+            return f"is not above the sky median ({img_median:.0f})"
+        if img_median > 0 and satlevel <= 2.0 * img_median:
+            return f"is only {satlevel/img_median:.1f}x the sky median ({img_median:.0f})"
+        if satlevel <= img_median + 0.1 * (img_max - img_median):
+            return (f"is within 10% of the dynamic range above the sky median "
+                    f"({img_median:.0f}, image max {img_max:.0f})")
+        return None
+
     # Validate any previously stored saturation (e.g. from a prior inspection run or FITS header)
-    # If it is <= 2x the sky median it almost certainly refers to raw detector ADU while the image
-    # has been calibrated (bias/flat/e- units), which would flag all stars as saturated.
-    if config.get('saturation') and config['saturation'] <= 2.0 * img_median:
-        log(f"Warning: stored saturation level ({config['saturation']:.0f}) is only "
-            f"{config['saturation']/img_median:.1f}x the sky median ({img_median:.0f}) — "
-            f"resetting to image-based estimate.")
-        config.pop('saturation', None)
+    if config.get('saturation'):
+        reason = _implausible_saturation(config['saturation'])
+        if reason:
+            log(f"Warning: stored saturation level ({config['saturation']:.0f}) {reason} — "
+                f"resetting to image-based estimate.")
+            config.pop('saturation', None)
 
     if not config.get('saturation'):
         satlevel = header.get(
@@ -969,11 +981,9 @@ def inspect_image(filename, config, verbose=True, show=False):
         )
 
         if satlevel:
-            # Same sanity check on the header value
-            if satlevel <= 2.0 * img_median:
-                log(f"Warning: header saturation level ({satlevel:.0f}) is only "
-                    f"{satlevel/img_median:.1f}x the sky median ({img_median:.0f}) — "
-                    f"this looks like a raw-ADU value on a calibrated image. Ignoring it.")
+            reason = _implausible_saturation(satlevel)
+            if reason:
+                log(f"Warning: header saturation level ({satlevel:.0f}) {reason}. Ignoring it.")
                 satlevel = None
             elif satlevel < 0.5 * img_max:
                 log(f"Warning: header saturation level ({satlevel:.0f}) is significantly "
@@ -2596,7 +2606,7 @@ def transients_simple_image(filename, config, verbose=True, show=False):
                 else:
                     obj1 = Table.read(otherpath)
                     oidx,_,__ = astrometry.spherical_match(obj['ra'], obj['dec'], obj1['ra'], obj1['dec'], 0.5*fwhm*pixscale)
-                    idx = np.in1d(obj['NUMBER'], obj['NUMBER'][oidx])
+                    idx = np.isin(obj['NUMBER'], obj['NUMBER'][oidx])
                     obj = obj[idx]
                     log(f"Task {other}: {len(obj1)} objects, {len(obj)} matches")
 
